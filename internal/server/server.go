@@ -30,6 +30,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/valkey/valkey/internal/config"
 	"github.com/valkey/valkey/internal/store"
@@ -93,8 +94,9 @@ func (s *Server) Start() error {
 	s.listener = ln
 	s.log.Printf("* Listening on %s", addr)
 
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.acceptLoop()
+	go s.expirationWorker()
 
 	return nil
 }
@@ -183,4 +185,43 @@ func (s *Server) unregister(id uint64) {
 	n := len(s.conns)
 	s.mu.Unlock()
 	s.log.Printf("- conn %d  closed  (total: %d)", id, n)
+}
+
+// expirationWorker runs in its own goroutine. It periodically samples keys
+// with TTLs and deletes any that have expired (active expiration).
+// This mirrors Redis's hz=10 approach: 100ms ticks, 20-key samples, adaptive.
+func (s *Server) expirationWorker() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.runExpirationCycle()
+		}
+	}
+}
+
+const (
+	expirySampleSize = 20
+	expiryThreshold  = 0.25 // loop again if >25% of sample was expired
+)
+
+func (s *Server) runExpirationCycle() {
+	for {
+		deleted := s.store.ExpireN(expirySampleSize)
+		if float64(deleted)/float64(expirySampleSize) < expiryThreshold {
+			return
+		}
+		// Check for shutdown between adaptive loops.
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+	}
 }

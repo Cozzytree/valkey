@@ -20,6 +20,7 @@ package zig
 */
 import "C"
 import (
+	"time"
 	"unsafe"
 
 	"github.com/valkey/valkey/internal/store"
@@ -94,6 +95,18 @@ func (s *ZigStore) Del(key string) bool {
 func (s *ZigStore) Len() int {
 	return int(C.store_len(s.ptr))
 }
+
+func (s *ZigStore) SetWithTTL(key string, value []byte, ttl time.Duration) {
+	s.Set(key, value) // TTL not supported in Zig backend
+}
+
+func (s *ZigStore) Expire(key string, ttl time.Duration) bool { return false }
+
+func (s *ZigStore) TTL(key string) (time.Duration, bool) { return -2, false }
+
+func (s *ZigStore) Persist(key string) bool { return false }
+
+func (s *ZigStore) ExpireN(n int) int { return 0 }
 
 func (s *ZigStore) Close() error {
 	C.store_free(s.ptr)

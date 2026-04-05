@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/valkey/valkey/internal/proto"
 )
@@ -257,6 +259,16 @@ func (c *Conn) handleRequest(args [][]byte) {
 		c.cmdGet(args[1:])
 	case "DEL":
 		c.cmdDel(args[1:])
+	case "EXPIRE":
+		c.cmdExpire(args[1:])
+	case "PEXPIRE":
+		c.cmdPExpire(args[1:])
+	case "TTL":
+		c.cmdTTL(args[1:])
+	case "PTTL":
+		c.cmdPTTL(args[1:])
+	case "PERSIST":
+		c.cmdPersist(args[1:])
 	default:
 		_ = c.WriteRaw(respErr("ERR unknown command '" + cmd + "'"))
 	}
@@ -280,7 +292,47 @@ func (c *Conn) cmdSet(args [][]byte) {
 	val := make([]byte, len(args[1]))
 	copy(val, args[1])
 
-	c.srv.store.Set(key, val)
+	// Parse optional trailing arguments: EX seconds | PX milliseconds
+	var ttl time.Duration
+	i := 2
+	for i < len(args) {
+		opt := strings.ToUpper(string(args[i]))
+		switch opt {
+		case "EX":
+			if i+1 >= len(args) {
+				_ = c.WriteRaw(respErr("ERR syntax error"))
+				return
+			}
+			secs, err := strconv.Atoi(string(args[i+1]))
+			if err != nil || secs <= 0 {
+				_ = c.WriteRaw(respErr("ERR invalid expire time in 'SET' command"))
+				return
+			}
+			ttl = time.Duration(secs) * time.Second
+			i += 2
+		case "PX":
+			if i+1 >= len(args) {
+				_ = c.WriteRaw(respErr("ERR syntax error"))
+				return
+			}
+			ms, err := strconv.Atoi(string(args[i+1]))
+			if err != nil || ms <= 0 {
+				_ = c.WriteRaw(respErr("ERR invalid expire time in 'SET' command"))
+				return
+			}
+			ttl = time.Duration(ms) * time.Millisecond
+			i += 2
+		default:
+			_ = c.WriteRaw(respErr("ERR syntax error"))
+			return
+		}
+	}
+
+	if ttl > 0 {
+		c.srv.store.SetWithTTL(key, val, ttl)
+	} else {
+		c.srv.store.Set(key, val)
+	}
 	_ = c.WriteRaw([]byte("+OK\r\n"))
 }
 
@@ -310,6 +362,98 @@ func (c *Conn) cmdDel(args [][]byte) {
 		}
 	}
 	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", deleted)))
+}
+
+func (c *Conn) cmdExpire(args [][]byte) {
+	if len(args) != 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'EXPIRE' command"))
+		return
+	}
+	secs, err := strconv.Atoi(string(args[1]))
+	if err != nil || secs <= 0 {
+		_ = c.WriteRaw(respErr("ERR invalid expire time in 'EXPIRE' command"))
+		return
+	}
+	ok := c.srv.store.Expire(string(args[0]), time.Duration(secs)*time.Second)
+	if ok {
+		_ = c.WriteRaw([]byte(":1\r\n"))
+	} else {
+		_ = c.WriteRaw([]byte(":0\r\n"))
+	}
+}
+
+func (c *Conn) cmdPExpire(args [][]byte) {
+	if len(args) != 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'PEXPIRE' command"))
+		return
+	}
+	ms, err := strconv.Atoi(string(args[1]))
+	if err != nil || ms <= 0 {
+		_ = c.WriteRaw(respErr("ERR invalid expire time in 'PEXPIRE' command"))
+		return
+	}
+	ok := c.srv.store.Expire(string(args[0]), time.Duration(ms)*time.Millisecond)
+	if ok {
+		_ = c.WriteRaw([]byte(":1\r\n"))
+	} else {
+		_ = c.WriteRaw([]byte(":0\r\n"))
+	}
+}
+
+func (c *Conn) cmdTTL(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'TTL' command"))
+		return
+	}
+	remaining, ok := c.srv.store.TTL(string(args[0]))
+	if !ok {
+		_ = c.WriteRaw([]byte(":-2\r\n"))
+		return
+	}
+	if remaining == -1 {
+		_ = c.WriteRaw([]byte(":-1\r\n"))
+		return
+	}
+	// Ceiling: 999ms → 1s (matches Redis behaviour of rounding up).
+	secs := int64((remaining + time.Second - 1) / time.Second)
+	if secs < 0 {
+		secs = 0
+	}
+	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", secs)))
+}
+
+func (c *Conn) cmdPTTL(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'PTTL' command"))
+		return
+	}
+	remaining, ok := c.srv.store.TTL(string(args[0]))
+	if !ok {
+		_ = c.WriteRaw([]byte(":-2\r\n"))
+		return
+	}
+	if remaining == -1 {
+		_ = c.WriteRaw([]byte(":-1\r\n"))
+		return
+	}
+	ms := remaining.Milliseconds()
+	if ms < 0 {
+		ms = 0
+	}
+	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", ms)))
+}
+
+func (c *Conn) cmdPersist(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'PERSIST' command"))
+		return
+	}
+	ok := c.srv.store.Persist(string(args[0]))
+	if ok {
+		_ = c.WriteRaw([]byte(":1\r\n"))
+	} else {
+		_ = c.WriteRaw([]byte(":0\r\n"))
+	}
 }
 
 // ─── RESP response builders ───────────────────────────────────────────────────

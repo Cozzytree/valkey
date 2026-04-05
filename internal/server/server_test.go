@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/valkey/valkey/internal/config"
@@ -129,6 +130,17 @@ func mustParseInt(t *testing.T, b []byte) int {
 		return -n
 	}
 	return n
+}
+
+// readInteger reads a RESP integer (:<number>\r\n) and returns it.
+func (c *client) readInteger(t *testing.T) int {
+	t.Helper()
+	prefix, err := c.reader.ReadByte()
+	require.NoError(t, err)
+	require.Equal(t, byte(':'), prefix, "expected integer prefix ':'")
+	line, err := c.reader.ReadLine()
+	require.NoError(t, err)
+	return mustParseInt(t, line)
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -267,4 +279,135 @@ func TestConcurrentSetGet(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		require.NoError(t, <-errc)
 	}
+}
+
+// ─── TTL tests ───────────────────────────────────────────────────────────────
+
+// TestSetEX verifies SET key value EX seconds expires the key.
+func TestSetEX(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "SET", "mykey", "hello", "EX", "1")
+	require.Equal(t, "OK", c.readSimpleString(t))
+
+	// Key should exist immediately.
+	c.send(t, "GET", "mykey")
+	require.Equal(t, []byte("hello"), c.readBulkString(t))
+
+	// TTL should be positive.
+	c.send(t, "TTL", "mykey")
+	ttl := c.readInteger(t)
+	require.True(t, ttl > 0 && ttl <= 1, "expected TTL in (0,1], got %d", ttl)
+
+	// Wait for expiry.
+	time.Sleep(1100 * time.Millisecond)
+
+	c.send(t, "GET", "mykey")
+	got := c.readBulkString(t)
+	require.Nil(t, got, "key should have expired")
+}
+
+// TestSetPX verifies SET key value PX milliseconds.
+func TestSetPX(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "SET", "mykey", "hello", "PX", "200")
+	require.Equal(t, "OK", c.readSimpleString(t))
+
+	c.send(t, "GET", "mykey")
+	require.Equal(t, []byte("hello"), c.readBulkString(t))
+
+	time.Sleep(250 * time.Millisecond)
+
+	c.send(t, "GET", "mykey")
+	require.Nil(t, c.readBulkString(t), "key should have expired")
+}
+
+// TestExpireAndTTL verifies the EXPIRE and TTL commands.
+func TestExpireAndTTL(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	// TTL on missing key → -2
+	c.send(t, "TTL", "nokey")
+	require.Equal(t, -2, c.readInteger(t))
+
+	// SET without TTL → TTL returns -1
+	c.send(t, "SET", "mykey", "val")
+	c.readSimpleString(t)
+
+	c.send(t, "TTL", "mykey")
+	require.Equal(t, -1, c.readInteger(t))
+
+	// EXPIRE sets a TTL
+	c.send(t, "EXPIRE", "mykey", "10")
+	require.Equal(t, 1, c.readInteger(t))
+
+	c.send(t, "TTL", "mykey")
+	ttl := c.readInteger(t)
+	require.True(t, ttl > 0 && ttl <= 10)
+
+	// EXPIRE on missing key → 0
+	c.send(t, "EXPIRE", "nokey", "10")
+	require.Equal(t, 0, c.readInteger(t))
+}
+
+// TestPersist verifies the PERSIST command removes TTL.
+func TestPersist(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "SET", "mykey", "val", "EX", "10")
+	c.readSimpleString(t)
+
+	c.send(t, "PERSIST", "mykey")
+	require.Equal(t, 1, c.readInteger(t))
+
+	c.send(t, "TTL", "mykey")
+	require.Equal(t, -1, c.readInteger(t))
+
+	// PERSIST on key without TTL → 0
+	c.send(t, "PERSIST", "mykey")
+	require.Equal(t, 0, c.readInteger(t))
+
+	// PERSIST on missing key → 0
+	c.send(t, "PERSIST", "nokey")
+	require.Equal(t, 0, c.readInteger(t))
+}
+
+// TestPExpireAndPTTL verifies millisecond-precision TTL.
+func TestPExpireAndPTTL(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "SET", "mykey", "val")
+	c.readSimpleString(t)
+
+	c.send(t, "PEXPIRE", "mykey", "5000")
+	require.Equal(t, 1, c.readInteger(t))
+
+	c.send(t, "PTTL", "mykey")
+	pttl := c.readInteger(t)
+	require.True(t, pttl > 0 && pttl <= 5000, "expected PTTL in (0,5000], got %d", pttl)
+}
+
+// TestSetClearsTTL verifies that a plain SET removes an existing TTL.
+func TestSetClearsTTL(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "SET", "mykey", "val", "EX", "10")
+	c.readSimpleString(t)
+
+	c.send(t, "TTL", "mykey")
+	require.True(t, c.readInteger(t) > 0)
+
+	// Plain SET should clear the TTL.
+	c.send(t, "SET", "mykey", "newval")
+	c.readSimpleString(t)
+
+	c.send(t, "TTL", "mykey")
+	require.Equal(t, -1, c.readInteger(t))
 }
