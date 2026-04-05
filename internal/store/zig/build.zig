@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    lib.installHeader(b.path("./src/main.zig"), "./zig_store.h");
 
     b.installArtifact(lib);
 }
