@@ -255,6 +255,8 @@ func (c *Conn) handleRequest(args [][]byte) {
 		c.cmdSet(args[1:])
 	case "GET":
 		c.cmdGet(args[1:])
+	case "DEL":
+		c.cmdDel(args[1:])
 	default:
 		_ = c.WriteRaw(respErr("ERR unknown command '" + cmd + "'"))
 	}
@@ -293,6 +295,21 @@ func (c *Conn) cmdGet(args [][]byte) {
 		return
 	}
 	_ = c.WriteRaw(respBulk(val))
+}
+
+// cmdDel deletes one or more keys and returns the count of keys that existed.
+func (c *Conn) cmdDel(args [][]byte) {
+	if len(args) < 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'DEL' command"))
+		return
+	}
+	deleted := int64(0)
+	for _, k := range args {
+		if c.srv.store.Del(string(k)) {
+			deleted++
+		}
+	}
+	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", deleted)))
 }
 
 // ─── RESP response builders ───────────────────────────────────────────────────

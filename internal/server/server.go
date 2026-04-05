@@ -39,7 +39,7 @@ import (
 type Server struct {
 	cfg      *config.Config
 	listener net.Listener
-	store    *store.Store
+	store    store.Store
 
 	// conns holds all live client connections. Protected by mu.
 	mu    sync.RWMutex
@@ -57,12 +57,18 @@ type Server struct {
 	log *log.Logger
 }
 
-// New allocates a Server. Call Start() to bind and begin accepting.
+// New allocates a Server backed by the default pure-Go store.
 func New(cfg *config.Config, logger *log.Logger) *Server {
+	return NewWithStore(cfg, logger, store.NewGoStore())
+}
+
+// NewWithStore allocates a Server using the provided Store backend.
+// Use this to inject the Zig store (or any other Store implementation).
+func NewWithStore(cfg *config.Config, logger *log.Logger, st store.Store) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		cfg:    cfg,
-		store:  store.New(),
+		store:  st,
 		conns:  make(map[uint64]*Conn),
 		ctx:    ctx,
 		cancel: cancel,
@@ -111,6 +117,9 @@ func (s *Server) Stop() {
 	s.mu.RUnlock()
 
 	s.wg.Wait()
+	if err := s.store.Close(); err != nil {
+		s.log.Printf("store close: %v", err)
+	}
 	s.log.Println("* Server stopped")
 }
 
