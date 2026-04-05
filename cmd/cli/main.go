@@ -142,79 +142,43 @@ func parseFlags(args []string) (host string, port int) {
 // ─── tab completion ───────────────────────────────────────────────────────────
 
 func completer() readline.AutoCompleter {
-	return readline.NewPrefixCompleter(
+	cmds := []string{
 		// String commands
-		readline.PcItem("SET"),
-		readline.PcItem("GET"),
-		readline.PcItem("DEL"),
-		readline.PcItem("MSET"),
-		readline.PcItem("MGET"),
-		readline.PcItem("APPEND"),
-		readline.PcItem("STRLEN"),
-		readline.PcItem("INCR"),
-		readline.PcItem("INCRBY"),
-		readline.PcItem("DECR"),
-		readline.PcItem("DECRBY"),
-		readline.PcItem("GETSET"),
-		readline.PcItem("SETNX"),
-		readline.PcItem("SETEX"),
-		readline.PcItem("PSETEX"),
+		"SET", "GET", "DEL", "MSET", "MGET", "APPEND", "STRLEN",
+		"INCR", "INCRBY", "DECR", "DECRBY", "GETSET", "SETNX", "SETEX", "PSETEX",
 		// Key commands
-		readline.PcItem("EXISTS"),
-		readline.PcItem("EXPIRE"),
-		readline.PcItem("PEXPIRE"),
-		readline.PcItem("TTL"),
-		readline.PcItem("PTTL"),
-		readline.PcItem("PERSIST"),
-		readline.PcItem("RENAME"),
-		readline.PcItem("TYPE"),
-		readline.PcItem("KEYS"),
-		readline.PcItem("SCAN"),
+		"EXISTS", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST",
+		"RENAME", "TYPE", "KEYS", "SCAN",
 		// List commands
-		readline.PcItem("LPUSH"),
-		readline.PcItem("RPUSH"),
-		readline.PcItem("LPOP"),
-		readline.PcItem("RPOP"),
-		readline.PcItem("LRANGE"),
-		readline.PcItem("LLEN"),
+		"LPUSH", "RPUSH", "LPOP", "RPOP", "LRANGE", "LLEN",
 		// Hash commands
-		readline.PcItem("HSET"),
-		readline.PcItem("HGET"),
-		readline.PcItem("HDEL"),
-		readline.PcItem("HGETALL"),
-		readline.PcItem("HKEYS"),
-		readline.PcItem("HVALS"),
-		readline.PcItem("HEXISTS"),
+		"HSET", "HGET", "HDEL", "HLEN", "HGETALL", "HKEYS", "HVALS", "HEXISTS",
 		// Set commands
-		readline.PcItem("SADD"),
-		readline.PcItem("SREM"),
-		readline.PcItem("SMEMBERS"),
-		readline.PcItem("SISMEMBER"),
+		"SADD", "SREM", "SMEMBERS", "SISMEMBER",
 		// Sorted set commands
-		readline.PcItem("ZADD"),
-		readline.PcItem("ZRANGE"),
-		readline.PcItem("ZRANK"),
-		readline.PcItem("ZREM"),
-		readline.PcItem("ZSCORE"),
+		"ZADD", "ZRANGE", "ZRANK", "ZREM", "ZSCORE",
 		// Server commands
-		readline.PcItem("PING"),
-		readline.PcItem("DBSIZE"),
-		readline.PcItem("FLUSHDB"),
-		readline.PcItem("FLUSHALL"),
-		readline.PcItem("INFO"),
-		readline.PcItem("SELECT"),
-		readline.PcItem("AUTH"),
-		readline.PcItem("CONFIG",
-			readline.PcItem("GET"),
-			readline.PcItem("SET"),
-			readline.PcItem("REWRITE"),
-		),
+		"PING", "DBSIZE", "FLUSHDB", "FLUSHALL", "INFO", "SELECT", "AUTH",
 		// Client-side
-		readline.PcItem("QUIT"),
-		readline.PcItem("EXIT"),
-		readline.PcItem("CLEAR"),
-		readline.PcItem("HELP"),
+		"QUIT", "EXIT", "CLEAR", "HELP",
+	}
+
+	items := make([]readline.PrefixCompleterInterface, 0, len(cmds)*2+1)
+	for _, cmd := range cmds {
+		items = append(items, readline.PcItem(cmd))
+		items = append(items, readline.PcItem(strings.ToLower(cmd)))
+	}
+	// CONFIG has subcommands.
+	items = append(items,
+		readline.PcItem("CONFIG",
+			readline.PcItem("GET"), readline.PcItem("SET"), readline.PcItem("REWRITE"),
+		),
+		readline.PcItem("config",
+			readline.PcItem("get"), readline.PcItem("set"), readline.PcItem("rewrite"),
+		),
 	)
+
+	return readline.NewPrefixCompleter(items...)
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -270,14 +234,44 @@ Valkey CLI — built-in commands:
   CLEAR         clear the screen
   QUIT / EXIT   disconnect and exit
 
-All other input is sent directly to the server as a RESP command.
-Tab-completion is available for all known command names.
+Server commands:
+  Strings:
+    SET key value [EX seconds | PX milliseconds]
+    GET key
+    DEL key [key ...]
+
+  TTL / Expiry:
+    EXPIRE key seconds          set TTL in seconds
+    PEXPIRE key milliseconds    set TTL in milliseconds
+    TTL key                     get remaining TTL in seconds
+    PTTL key                    get remaining TTL in milliseconds
+    PERSIST key                 remove TTL
+
+  Hashes:
+    HSET key field value [field value ...]
+    HGET key field
+    HDEL key field [field ...]
+    HGETALL key
+    HLEN key
+    HEXISTS key field
+    HKEYS key
+    HVALS key
+
+  Server:
+    PING
+
+Tab-completion is available for all command names (upper and lowercase).
 Use arrow keys to navigate history.
 
 Examples:
   SET name valkey
+  SET session token123 EX 3600
   GET name
-  SET greeting "hello world"
+  EXPIRE name 60
+  TTL name
+  HSET user:1 name Alice age 30
+  HGET user:1 name
+  HGETALL user:1
   DEL name
   PING
 `)

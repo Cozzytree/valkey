@@ -81,7 +81,7 @@ func display(v *Value, depth int) string {
 			if i > 0 {
 				b.WriteString("\n")
 			}
-			b.WriteString(fmt.Sprintf("%s%d) %s", indent, i+1, display(e, depth+1)))
+			fmt.Fprintf(&b, "%s%d) %s", indent, i+1, display(e, depth+1))
 		}
 		return b.String()
 	}

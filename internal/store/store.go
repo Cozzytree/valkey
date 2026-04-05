@@ -43,6 +43,39 @@ type Store interface {
 	// Returns the number of keys deleted.
 	ExpireN(n int) int
 
+	// HSet sets field/value pairs on a hash key. Fields are passed as
+	// alternating field, value strings. Returns the number of new fields added.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HSet(key string, fields ...string) (int, error)
+
+	// HGet returns the value of a field in a hash.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HGet(key, field string) ([]byte, bool, error)
+
+	// HDel removes fields from a hash. Returns the number of fields deleted.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HDel(key string, fields ...string) (int, error)
+
+	// HGetAll returns all field/value pairs in a hash.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HGetAll(key string) (map[string][]byte, error)
+
+	// HLen returns the number of fields in a hash.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HLen(key string) (int, error)
+
+	// HExists returns whether a field exists in a hash.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HExists(key, field string) (bool, error)
+
+	// HKeys returns all field names in a hash.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HKeys(key string) ([]string, error)
+
+	// HVals returns all values in a hash.
+	// Returns ErrWrongType if the key exists and is not a hash.
+	HVals(key string) ([][]byte, error)
+
 	// Len returns the number of keys currently in the store.
 	Len() int
 

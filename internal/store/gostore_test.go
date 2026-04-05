@@ -142,3 +142,176 @@ func TestDel_ClearsExpiry(t *testing.T) {
 	require.False(t, ok)
 	require.Equal(t, 0, s.Len())
 }
+
+// ─── hash tests ──────────────────────────────────────────────────────────────
+
+func TestHSet_NewHash(t *testing.T) {
+	s := NewGoStore()
+	added, err := s.HSet("h", "name", "Alice", "age", "30")
+	require.NoError(t, err)
+	require.Equal(t, 2, added)
+	require.Equal(t, 1, s.Len())
+}
+
+func TestHSet_UpdateExisting(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "name", "Alice")
+	added, err := s.HSet("h", "name", "Bob", "email", "bob@test.com")
+	require.NoError(t, err)
+	require.Equal(t, 1, added) // only email is new
+
+	v, ok, err := s.HGet("h", "name")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("Bob"), v)
+}
+
+func TestHGet(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "f1", "v1")
+
+	v, ok, err := s.HGet("h", "f1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("v1"), v)
+
+	// Missing field.
+	_, ok, err = s.HGet("h", "nope")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// Missing key.
+	_, ok, err = s.HGet("nokey", "f1")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestHDel(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "a", "1", "b", "2", "c", "3")
+
+	deleted, err := s.HDel("h", "a", "b", "nonexistent")
+	require.NoError(t, err)
+	require.Equal(t, 2, deleted)
+
+	n, _ := s.HLen("h")
+	require.Equal(t, 1, n)
+}
+
+func TestHDel_RemovesEmptyHash(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "f", "v")
+	s.HDel("h", "f")
+	require.Equal(t, 0, s.Len()) // key should be gone
+}
+
+func TestHGetAll(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "a", "1", "b", "2")
+
+	m, err := s.HGetAll("h")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]byte{"a": []byte("1"), "b": []byte("2")}, m)
+
+	// Missing key.
+	m, err = s.HGetAll("nokey")
+	require.NoError(t, err)
+	require.Nil(t, m)
+}
+
+func TestHLen(t *testing.T) {
+	s := NewGoStore()
+	n, err := s.HLen("nokey")
+	require.NoError(t, err)
+	require.Equal(t, 0, n)
+
+	s.HSet("h", "a", "1", "b", "2")
+	n, err = s.HLen("h")
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+}
+
+func TestHExists(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "f", "v")
+
+	ok, err := s.HExists("h", "f")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = s.HExists("h", "nope")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = s.HExists("nokey", "f")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestHKeys(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "b", "2", "a", "1")
+
+	keys, err := s.HKeys("h")
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"a", "b"}, keys)
+}
+
+func TestHVals(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "a", "1", "b", "2")
+
+	vals, err := s.HVals("h")
+	require.NoError(t, err)
+	require.ElementsMatch(t, [][]byte{[]byte("1"), []byte("2")}, vals)
+}
+
+func TestWrongType_GetOnHash(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "f", "v")
+
+	// GET on a hash key should return false (not the hash data).
+	v, ok := s.Get("h")
+	require.False(t, ok)
+	require.Nil(t, v)
+}
+
+func TestWrongType_HGetOnString(t *testing.T) {
+	s := NewGoStore()
+	s.Set("k", []byte("v"))
+
+	_, _, err := s.HGet("k", "f")
+	require.ErrorIs(t, err, ErrWrongType)
+}
+
+func TestWrongType_HSetOnString(t *testing.T) {
+	s := NewGoStore()
+	s.Set("k", []byte("v"))
+
+	_, err := s.HSet("k", "f", "v")
+	require.ErrorIs(t, err, ErrWrongType)
+}
+
+func TestHash_WithExpire(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "f", "v")
+	s.Expire("h", 50*time.Millisecond)
+
+	v, ok, err := s.HGet("h", "f")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("v"), v)
+
+	time.Sleep(60 * time.Millisecond)
+
+	_, ok, err = s.HGet("h", "f")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestDel_RemovesHash(t *testing.T) {
+	s := NewGoStore()
+	s.HSet("h", "f", "v")
+	require.True(t, s.Del("h"))
+	require.Equal(t, 0, s.Len())
+}

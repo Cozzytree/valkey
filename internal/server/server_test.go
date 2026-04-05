@@ -132,6 +132,25 @@ func mustParseInt(t *testing.T, b []byte) int {
 	return n
 }
 
+// readArray reads a RESP array of bulk strings and returns them.
+func (c *client) readArray(t *testing.T) [][]byte {
+	t.Helper()
+	prefix, err := c.reader.ReadByte()
+	require.NoError(t, err)
+	require.Equal(t, byte('*'), prefix, "expected array prefix '*'")
+	line, err := c.reader.ReadLine()
+	require.NoError(t, err)
+	count := mustParseInt(t, line)
+	if count < 0 {
+		return nil
+	}
+	result := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		result[i] = c.readBulkString(t)
+	}
+	return result
+}
+
 // readInteger reads a RESP integer (:<number>\r\n) and returns it.
 func (c *client) readInteger(t *testing.T) int {
 	t.Helper()
@@ -410,4 +429,168 @@ func TestSetClearsTTL(t *testing.T) {
 
 	c.send(t, "TTL", "mykey")
 	require.Equal(t, -1, c.readInteger(t))
+}
+
+// ─── Hash tests ──────────────────────────────────────────────────────────────
+
+func TestHSetAndHGet(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "user:1", "name", "Alice", "age", "30")
+	require.Equal(t, 2, c.readInteger(t))
+
+	c.send(t, "HGET", "user:1", "name")
+	require.Equal(t, []byte("Alice"), c.readBulkString(t))
+
+	c.send(t, "HGET", "user:1", "age")
+	require.Equal(t, []byte("30"), c.readBulkString(t))
+
+	// Missing field.
+	c.send(t, "HGET", "user:1", "email")
+	require.Nil(t, c.readBulkString(t))
+}
+
+func TestHSetUpdate(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "h", "f", "v1")
+	require.Equal(t, 1, c.readInteger(t))
+
+	// Update existing field — returns 0 (no new fields).
+	c.send(t, "HSET", "h", "f", "v2")
+	require.Equal(t, 0, c.readInteger(t))
+
+	c.send(t, "HGET", "h", "f")
+	require.Equal(t, []byte("v2"), c.readBulkString(t))
+}
+
+func TestHGetAll(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "h", "a", "1", "b", "2")
+	c.readInteger(t)
+
+	c.send(t, "HGETALL", "h")
+	arr := c.readArray(t)
+	require.Equal(t, 4, len(arr)) // 2 field/value pairs
+
+	// Convert to map for order-independent comparison.
+	m := make(map[string]string)
+	for i := 0; i < len(arr); i += 2 {
+		m[string(arr[i])] = string(arr[i+1])
+	}
+	require.Equal(t, map[string]string{"a": "1", "b": "2"}, m)
+
+	// Empty/missing key.
+	c.send(t, "HGETALL", "nokey")
+	arr = c.readArray(t)
+	require.Equal(t, 0, len(arr))
+}
+
+func TestHDel(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "h", "a", "1", "b", "2", "c", "3")
+	c.readInteger(t)
+
+	c.send(t, "HDEL", "h", "a", "b")
+	require.Equal(t, 2, c.readInteger(t))
+
+	c.send(t, "HLEN", "h")
+	require.Equal(t, 1, c.readInteger(t))
+}
+
+func TestHLen(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HLEN", "nokey")
+	require.Equal(t, 0, c.readInteger(t))
+
+	c.send(t, "HSET", "h", "a", "1", "b", "2")
+	c.readInteger(t)
+
+	c.send(t, "HLEN", "h")
+	require.Equal(t, 2, c.readInteger(t))
+}
+
+func TestHExists(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "h", "f", "v")
+	c.readInteger(t)
+
+	c.send(t, "HEXISTS", "h", "f")
+	require.Equal(t, 1, c.readInteger(t))
+
+	c.send(t, "HEXISTS", "h", "nope")
+	require.Equal(t, 0, c.readInteger(t))
+}
+
+func TestHKeysAndHVals(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "h", "a", "1", "b", "2")
+	c.readInteger(t)
+
+	c.send(t, "HKEYS", "h")
+	keys := c.readArray(t)
+	keyStrs := make([]string, len(keys))
+	for i, k := range keys {
+		keyStrs[i] = string(k)
+	}
+	require.ElementsMatch(t, []string{"a", "b"}, keyStrs)
+
+	c.send(t, "HVALS", "h")
+	vals := c.readArray(t)
+	valStrs := make([]string, len(vals))
+	for i, v := range vals {
+		valStrs[i] = string(v)
+	}
+	require.ElementsMatch(t, []string{"1", "2"}, valStrs)
+}
+
+func TestWrongType_GetOnHash(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "h", "f", "v")
+	c.readInteger(t)
+
+	// GET on a hash key should return nil (not WRONGTYPE — matches our store behaviour).
+	c.send(t, "GET", "h")
+	require.Nil(t, c.readBulkString(t))
+}
+
+func TestWrongType_HSetOnString(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "SET", "k", "v")
+	c.readSimpleString(t)
+
+	c.send(t, "HSET", "k", "f", "v")
+	errMsg := c.readError(t)
+	require.Contains(t, errMsg, "WRONGTYPE")
+}
+
+func TestHash_ExpireWorks(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "HSET", "h", "f", "v")
+	c.readInteger(t)
+
+	c.send(t, "EXPIRE", "h", "1")
+	require.Equal(t, 1, c.readInteger(t))
+
+	c.send(t, "TTL", "h")
+	ttl := c.readInteger(t)
+	require.True(t, ttl > 0 && ttl <= 1)
 }

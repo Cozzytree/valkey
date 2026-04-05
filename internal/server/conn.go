@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/valkey/valkey/internal/proto"
+	"github.com/valkey/valkey/internal/store"
 )
 
 // connState tracks the lifecycle phase of a connection.
@@ -269,6 +270,22 @@ func (c *Conn) handleRequest(args [][]byte) {
 		c.cmdPTTL(args[1:])
 	case "PERSIST":
 		c.cmdPersist(args[1:])
+	case "HSET":
+		c.cmdHSet(args[1:])
+	case "HGET":
+		c.cmdHGet(args[1:])
+	case "HDEL":
+		c.cmdHDel(args[1:])
+	case "HGETALL":
+		c.cmdHGetAll(args[1:])
+	case "HLEN":
+		c.cmdHLen(args[1:])
+	case "HEXISTS":
+		c.cmdHExists(args[1:])
+	case "HKEYS":
+		c.cmdHKeys(args[1:])
+	case "HVALS":
+		c.cmdHVals(args[1:])
 	default:
 		_ = c.WriteRaw(respErr("ERR unknown command '" + cmd + "'"))
 	}
@@ -415,11 +432,8 @@ func (c *Conn) cmdTTL(args [][]byte) {
 		return
 	}
 	// Ceiling: 999ms → 1s (matches Redis behaviour of rounding up).
-	secs := int64((remaining + time.Second - 1) / time.Second)
-	if secs < 0 {
-		secs = 0
-	}
-	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", secs)))
+	secs := max(int64((remaining+time.Second-1)/time.Second), 0)
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", secs))
 }
 
 func (c *Conn) cmdPTTL(args [][]byte) {
@@ -436,10 +450,7 @@ func (c *Conn) cmdPTTL(args [][]byte) {
 		_ = c.WriteRaw([]byte(":-1\r\n"))
 		return
 	}
-	ms := remaining.Milliseconds()
-	if ms < 0 {
-		ms = 0
-	}
+	ms := max(remaining.Milliseconds(), 0)
 	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", ms)))
 }
 
@@ -453,6 +464,158 @@ func (c *Conn) cmdPersist(args [][]byte) {
 		_ = c.WriteRaw([]byte(":1\r\n"))
 	} else {
 		_ = c.WriteRaw([]byte(":0\r\n"))
+	}
+}
+
+// ─── hash commands ───────────────────────────────────────────────────────────
+
+func (c *Conn) cmdHSet(args [][]byte) {
+	if len(args) < 3 || len(args)%2 == 0 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HSET' command"))
+		return
+	}
+	key := string(args[0])
+	fields := make([]string, len(args)-1)
+	for i, a := range args[1:] {
+		fields[i] = string(a)
+	}
+	added, err := c.srv.store.HSet(key, fields...)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", added))
+}
+
+func (c *Conn) cmdHGet(args [][]byte) {
+	if len(args) != 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HGET' command"))
+		return
+	}
+	val, ok, err := c.srv.store.HGet(string(args[0]), string(args[1]))
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if !ok {
+		_ = c.WriteRaw([]byte("$-1\r\n"))
+		return
+	}
+	_ = c.WriteRaw(respBulk(val))
+}
+
+func (c *Conn) cmdHDel(args [][]byte) {
+	if len(args) < 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HDEL' command"))
+		return
+	}
+	fields := make([]string, len(args)-1)
+	for i, a := range args[1:] {
+		fields[i] = string(a)
+	}
+	deleted, err := c.srv.store.HDel(string(args[0]), fields...)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", deleted))
+}
+
+func (c *Conn) cmdHGetAll(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HGETALL' command"))
+		return
+	}
+	m, err := c.srv.store.HGetAll(string(args[0]))
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if m == nil {
+		_ = c.WriteRaw([]byte("*0\r\n"))
+		return
+	}
+	items := make([][]byte, 0, len(m)*2)
+	for k, v := range m {
+		items = append(items, []byte(k), v)
+	}
+	_ = c.WriteRaw(respArray(items))
+}
+
+func (c *Conn) cmdHLen(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HLEN' command"))
+		return
+	}
+	n, err := c.srv.store.HLen(string(args[0]))
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", n)))
+}
+
+func (c *Conn) cmdHExists(args [][]byte) {
+	if len(args) != 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HEXISTS' command"))
+		return
+	}
+	ok, err := c.srv.store.HExists(string(args[0]), string(args[1]))
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if ok {
+		_ = c.WriteRaw([]byte(":1\r\n"))
+	} else {
+		_ = c.WriteRaw([]byte(":0\r\n"))
+	}
+}
+
+func (c *Conn) cmdHKeys(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HKEYS' command"))
+		return
+	}
+	keys, err := c.srv.store.HKeys(string(args[0]))
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if keys == nil {
+		_ = c.WriteRaw([]byte("*0\r\n"))
+		return
+	}
+	items := make([][]byte, len(keys))
+	for i, k := range keys {
+		items[i] = []byte(k)
+	}
+	_ = c.WriteRaw(respArray(items))
+}
+
+func (c *Conn) cmdHVals(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'HVALS' command"))
+		return
+	}
+	vals, err := c.srv.store.HVals(string(args[0]))
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if vals == nil {
+		_ = c.WriteRaw([]byte("*0\r\n"))
+		return
+	}
+	_ = c.WriteRaw(respArray(vals))
+}
+
+// writeErr writes a WRONGTYPE or other store error as a RESP error.
+func (c *Conn) writeErr(err error) {
+	if errors.Is(err, store.ErrWrongType) {
+		_ = c.WriteRaw(respErr(store.ErrWrongType.Error()))
+	} else {
+		_ = c.WriteRaw(respErr("ERR " + err.Error()))
 	}
 }
 
@@ -471,6 +634,15 @@ func respBulk(v []byte) []byte {
 // respErr encodes msg as a RESP simple error: -<msg>\r\n
 func respErr(msg string) []byte {
 	return []byte("-" + msg + "\r\n")
+}
+
+// respArray encodes items as a RESP array of bulk strings.
+func respArray(items [][]byte) []byte {
+	buf := []byte(fmt.Sprintf("*%d\r\n", len(items)))
+	for _, item := range items {
+		buf = append(buf, respBulk(item)...)
+	}
+	return buf
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

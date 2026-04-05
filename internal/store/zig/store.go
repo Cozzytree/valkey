@@ -108,6 +108,19 @@ func (s *ZigStore) Persist(key string) bool { return false }
 
 func (s *ZigStore) ExpireN(n int) int { return 0 }
 
+func (s *ZigStore) HSet(key string, fields ...string) (int, error) {
+	return 0, store.ErrWrongType
+}
+func (s *ZigStore) HGet(key, field string) ([]byte, bool, error) { return nil, false, nil }
+func (s *ZigStore) HDel(key string, fields ...string) (int, error) {
+	return 0, nil
+}
+func (s *ZigStore) HGetAll(key string) (map[string][]byte, error) { return nil, nil }
+func (s *ZigStore) HLen(key string) (int, error)                  { return 0, nil }
+func (s *ZigStore) HExists(key, field string) (bool, error)       { return false, nil }
+func (s *ZigStore) HKeys(key string) ([]string, error)            { return nil, nil }
+func (s *ZigStore) HVals(key string) ([][]byte, error)            { return nil, nil }
+
 func (s *ZigStore) Close() error {
 	C.store_free(s.ptr)
 	s.ptr = nil

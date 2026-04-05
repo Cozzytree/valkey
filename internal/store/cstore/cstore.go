@@ -156,6 +156,19 @@ func (s *CStore) Len() int {
 	return int(n)
 }
 
+func (s *CStore) HSet(key string, fields ...string) (int, error) {
+	return 0, store.ErrWrongType
+}
+func (s *CStore) HGet(key, field string) ([]byte, bool, error) { return nil, false, nil }
+func (s *CStore) HDel(key string, fields ...string) (int, error) {
+	return 0, nil
+}
+func (s *CStore) HGetAll(key string) (map[string][]byte, error) { return nil, nil }
+func (s *CStore) HLen(key string) (int, error)                  { return 0, nil }
+func (s *CStore) HExists(key, field string) (bool, error)       { return false, nil }
+func (s *CStore) HKeys(key string) ([]string, error)            { return nil, nil }
+func (s *CStore) HVals(key string) ([][]byte, error)            { return nil, nil }
+
 func (s *CStore) Close() error {
 	s.mu.Lock()
 	if s.ptr != nil {
