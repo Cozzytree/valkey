@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -286,6 +287,16 @@ func (c *Conn) handleRequest(args [][]byte) {
 		c.cmdHKeys(args[1:])
 	case "HVALS":
 		c.cmdHVals(args[1:])
+	case "JSON.SET":
+		c.cmdJSONSet(args[1:])
+	case "JSON.GET":
+		c.cmdJSONGet(args[1:])
+	case "JSON.DEL":
+		c.cmdJSONDel(args[1:])
+	case "JSON.TYPE":
+		c.cmdJSONType(args[1:])
+	case "JSON.NUMINCRBY":
+		c.cmdJSONNumIncrBy(args[1:])
 	default:
 		_ = c.WriteRaw(respErr("ERR unknown command '" + cmd + "'"))
 	}
@@ -608,6 +619,116 @@ func (c *Conn) cmdHVals(args [][]byte) {
 		return
 	}
 	_ = c.WriteRaw(respArray(vals))
+}
+
+// ─── JSON commands ──────────────────────────────────────────────────────────
+
+func (c *Conn) cmdJSONSet(args [][]byte) {
+	if len(args) != 3 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'JSON.SET' command"))
+		return
+	}
+	key := string(args[0])
+	path := string(args[1])
+	var value any
+	if err := json.Unmarshal(args[2], &value); err != nil {
+		_ = c.WriteRaw(respErr("ERR invalid JSON: " + err.Error()))
+		return
+	}
+	if err := c.srv.store.JSONSet(key, path, value); err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw([]byte("+OK\r\n"))
+}
+
+func (c *Conn) cmdJSONGet(args [][]byte) {
+	if len(args) < 1 || len(args) > 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'JSON.GET' command"))
+		return
+	}
+	key := string(args[0])
+	path := "$"
+	if len(args) == 2 {
+		path = string(args[1])
+	}
+	val, ok, err := c.srv.store.JSONGet(key, path)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if !ok {
+		_ = c.WriteRaw([]byte("$-1\r\n"))
+		return
+	}
+	data, err := json.Marshal(val)
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR failed to marshal JSON: " + err.Error()))
+		return
+	}
+	_ = c.WriteRaw(respBulk(data))
+}
+
+func (c *Conn) cmdJSONDel(args [][]byte) {
+	if len(args) < 1 || len(args) > 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'JSON.DEL' command"))
+		return
+	}
+	key := string(args[0])
+	path := "$"
+	if len(args) == 2 {
+		path = string(args[1])
+	}
+	count, err := c.srv.store.JSONDel(key, path)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", count))
+}
+
+func (c *Conn) cmdJSONType(args [][]byte) {
+	if len(args) < 1 || len(args) > 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'JSON.TYPE' command"))
+		return
+	}
+	key := string(args[0])
+	path := "$"
+	if len(args) == 2 {
+		path = string(args[1])
+	}
+	typeName, err := c.srv.store.JSONType(key, path)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if typeName == "" {
+		_ = c.WriteRaw([]byte("$-1\r\n"))
+		return
+	}
+	_ = c.WriteRaw([]byte("+" + typeName + "\r\n"))
+}
+
+func (c *Conn) cmdJSONNumIncrBy(args [][]byte) {
+	if len(args) != 3 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'JSON.NUMINCRBY' command"))
+		return
+	}
+	key := string(args[0])
+	path := string(args[1])
+	n, err := strconv.ParseFloat(string(args[2]), 64)
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not a valid float"))
+		return
+	}
+	result, err := c.srv.store.JSONNumIncrBy(key, path, n)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	// Return the result as a bulk string (matching RedisJSON).
+	s := strconv.FormatFloat(result, 'f', -1, 64)
+	_ = c.WriteRaw(respBulk([]byte(s)))
 }
 
 // writeErr writes a WRONGTYPE or other store error as a RESP error.

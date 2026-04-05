@@ -334,6 +334,105 @@ func (s *GoStore) HVals(key string) ([][]byte, error) {
 	return vals, nil
 }
 
+// ─── JSON operations ────────────────────────────────────────────────────────
+
+func (s *GoStore) JSONSet(key, path string, value any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e := s.getEntryLocked(key)
+	if e == nil {
+		if path != "$" {
+			return ErrPathNotFound
+		}
+		s.data[key] = &Entry{Type: TypeJSON, JSON: value}
+		return nil
+	}
+	if e.Type != TypeJSON {
+		return ErrWrongType
+	}
+	updated, err := jsonPathSet(e.JSON, path, value)
+	if err != nil {
+		return err
+	}
+	e.JSON = updated
+	return nil
+}
+
+func (s *GoStore) JSONGet(key, path string) (any, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e := s.getEntryLocked(key)
+	if e == nil {
+		return nil, false, nil
+	}
+	if e.Type != TypeJSON {
+		return nil, false, ErrWrongType
+	}
+	val, err := jsonPathGet(e.JSON, path)
+	if err != nil {
+		return nil, false, err
+	}
+	return val, true, nil
+}
+
+func (s *GoStore) JSONDel(key, path string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e := s.getEntryLocked(key)
+	if e == nil {
+		return 0, nil
+	}
+	if e.Type != TypeJSON {
+		return 0, ErrWrongType
+	}
+	if path == "$" {
+		delete(s.data, key)
+		return 1, nil
+	}
+	updated, count, err := jsonPathDel(e.JSON, path)
+	if err != nil {
+		return 0, err
+	}
+	e.JSON = updated
+	return count, nil
+}
+
+func (s *GoStore) JSONType(key, path string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e := s.getEntryLocked(key)
+	if e == nil {
+		return "", nil
+	}
+	if e.Type != TypeJSON {
+		return "", ErrWrongType
+	}
+	return jsonPathType(e.JSON, path)
+}
+
+func (s *GoStore) JSONNumIncrBy(key, path string, n float64) (float64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e := s.getEntryLocked(key)
+	if e == nil {
+		return 0, ErrPathNotFound
+	}
+	if e.Type != TypeJSON {
+		return 0, ErrWrongType
+	}
+	updated, result, err := jsonNumIncrBy(e.JSON, path, n)
+	if err != nil {
+		return 0, err
+	}
+	e.JSON = updated
+	return result, nil
+}
+
 // ─── general ─────────────────────────────────────────────────────────────────
 
 func (s *GoStore) Len() int {

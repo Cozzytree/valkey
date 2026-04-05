@@ -594,3 +594,127 @@ func TestHash_ExpireWorks(t *testing.T) {
 	ttl := c.readInteger(t)
 	require.True(t, ttl > 0 && ttl <= 1)
 }
+
+// ─── JSON tests ─────────────────────────────────────────────────────────────
+
+func TestJSONSetAndGet(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.SET", "user", "$", `{"name":"Alice","age":30}`)
+	require.Equal(t, "OK", c.readSimpleString(t))
+
+	c.send(t, "JSON.GET", "user")
+	got := c.readBulkString(t)
+	require.Contains(t, string(got), `"name":"Alice"`)
+	require.Contains(t, string(got), `"age":30`)
+}
+
+func TestJSONSetNestedUpdate(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.SET", "user", "$", `{"name":"Alice","age":30}`)
+	c.readSimpleString(t)
+
+	c.send(t, "JSON.SET", "user", "$.age", "31")
+	require.Equal(t, "OK", c.readSimpleString(t))
+
+	c.send(t, "JSON.GET", "user", "$.age")
+	require.Equal(t, []byte("31"), c.readBulkString(t))
+}
+
+func TestJSONGetWithPath(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.SET", "user", "$", `{"name":"Alice","age":30}`)
+	c.readSimpleString(t)
+
+	c.send(t, "JSON.GET", "user", "$.name")
+	require.Equal(t, []byte(`"Alice"`), c.readBulkString(t))
+}
+
+func TestJSONGetMissingKey(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.GET", "nokey")
+	require.Nil(t, c.readBulkString(t))
+}
+
+func TestJSONDel_Field(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.SET", "user", "$", `{"name":"Alice","age":30}`)
+	c.readSimpleString(t)
+
+	c.send(t, "JSON.DEL", "user", "$.age")
+	require.Equal(t, 1, c.readInteger(t))
+
+	c.send(t, "JSON.GET", "user")
+	got := c.readBulkString(t)
+	require.Equal(t, `{"name":"Alice"}`, string(got))
+}
+
+func TestJSONDel_Root(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.SET", "user", "$", `{"name":"Alice"}`)
+	c.readSimpleString(t)
+
+	c.send(t, "JSON.DEL", "user")
+	require.Equal(t, 1, c.readInteger(t))
+
+	c.send(t, "JSON.GET", "user")
+	require.Nil(t, c.readBulkString(t))
+}
+
+func TestJSONType(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.SET", "k", "$", `{"name":"Alice","age":30,"tags":["a"]}`)
+	c.readSimpleString(t)
+
+	c.send(t, "JSON.TYPE", "k")
+	require.Equal(t, "object", c.readSimpleString(t))
+
+	c.send(t, "JSON.TYPE", "k", "$.name")
+	require.Equal(t, "string", c.readSimpleString(t))
+
+	c.send(t, "JSON.TYPE", "k", "$.age")
+	require.Equal(t, "number", c.readSimpleString(t))
+
+	c.send(t, "JSON.TYPE", "k", "$.tags")
+	require.Equal(t, "array", c.readSimpleString(t))
+}
+
+func TestJSONNumIncrBy(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "JSON.SET", "k", "$", `{"counter":10}`)
+	c.readSimpleString(t)
+
+	c.send(t, "JSON.NUMINCRBY", "k", "$.counter", "5")
+	got := c.readBulkString(t)
+	require.Equal(t, "15", string(got))
+
+	c.send(t, "JSON.GET", "k", "$.counter")
+	require.Equal(t, []byte("15"), c.readBulkString(t))
+}
+
+func TestJSONWrongType(t *testing.T) {
+	srv := startServer(t)
+	c := dial(t, srv)
+
+	c.send(t, "SET", "k", "v")
+	c.readSimpleString(t)
+
+	c.send(t, "JSON.GET", "k")
+	errMsg := c.readError(t)
+	require.Contains(t, errMsg, "WRONGTYPE")
+}

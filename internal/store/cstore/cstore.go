@@ -169,6 +169,12 @@ func (s *CStore) HExists(key, field string) (bool, error)       { return false, 
 func (s *CStore) HKeys(key string) ([]string, error)            { return nil, nil }
 func (s *CStore) HVals(key string) ([][]byte, error)            { return nil, nil }
 
+func (s *CStore) JSONSet(key, path string, value any) error             { return store.ErrWrongType }
+func (s *CStore) JSONGet(key, path string) (any, bool, error)           { return nil, false, nil }
+func (s *CStore) JSONDel(key, path string) (int, error)                 { return 0, nil }
+func (s *CStore) JSONType(key, path string) (string, error)             { return "", nil }
+func (s *CStore) JSONNumIncrBy(key, path string, n float64) (float64, error) { return 0, nil }
+
 func (s *CStore) Close() error {
 	s.mu.Lock()
 	if s.ptr != nil {

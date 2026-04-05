@@ -1,0 +1,389 @@
+package client
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"time"
+)
+
+// ErrNil is returned when the server replies with a null bulk string (key does not exist).
+var ErrNil = errors.New("valkey: nil")
+
+// errFromValue converts a RESP error Value into a Go error.
+func errFromValue(v *Value) error {
+	if v.IsError() {
+		return errors.New(v.String())
+	}
+	return nil
+}
+
+// ─── strings ─────────────────────────────────────────────────────────────────
+
+// Set stores key → value. Returns nil on success.
+func (c *Client) Set(key, value string) error {
+	v, err := c.Do("SET", key, value)
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// SetEX stores key → value with a TTL in seconds.
+func (c *Client) SetEX(key, value string, seconds int) error {
+	v, err := c.Do("SET", key, value, "EX", strconv.Itoa(seconds))
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// SetPX stores key → value with a TTL in milliseconds.
+func (c *Client) SetPX(key, value string, milliseconds int) error {
+	v, err := c.Do("SET", key, value, "PX", strconv.Itoa(milliseconds))
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// Get retrieves the value for key. Returns ErrNil if the key does not exist.
+func (c *Client) Get(key string) (string, error) {
+	v, err := c.Do("GET", key)
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	if v.IsNull() {
+		return "", ErrNil
+	}
+	return string(v.Bytes()), nil
+}
+
+// GetBytes is like Get but returns []byte.
+func (c *Client) GetBytes(key string) ([]byte, error) {
+	v, err := c.Do("GET", key)
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	if v.IsNull() {
+		return nil, ErrNil
+	}
+	return v.Bytes(), nil
+}
+
+// Del deletes one or more keys. Returns the number of keys removed.
+func (c *Client) Del(keys ...string) (int64, error) {
+	args := make([]string, 0, 1+len(keys))
+	args = append(args, "DEL")
+	args = append(args, keys...)
+	v, err := c.Do(args...)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// ─── TTL / expiry ────────────────────────────────────────────────────────────
+
+// Expire sets a TTL on key. Returns true if the key exists.
+func (c *Client) Expire(key string, seconds int) (bool, error) {
+	v, err := c.Do("EXPIRE", key, strconv.Itoa(seconds))
+	if err != nil {
+		return false, err
+	}
+	if err := errFromValue(v); err != nil {
+		return false, err
+	}
+	return v.Integer() == 1, nil
+}
+
+// PExpire sets a TTL in milliseconds. Returns true if the key exists.
+func (c *Client) PExpire(key string, milliseconds int) (bool, error) {
+	v, err := c.Do("PEXPIRE", key, strconv.Itoa(milliseconds))
+	if err != nil {
+		return false, err
+	}
+	if err := errFromValue(v); err != nil {
+		return false, err
+	}
+	return v.Integer() == 1, nil
+}
+
+// TTL returns the remaining time-to-live for key.
+// Returns -2 if the key does not exist, -1 if the key has no TTL.
+func (c *Client) TTL(key string) (time.Duration, error) {
+	v, err := c.Do("TTL", key)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	secs := v.Integer()
+	if secs < 0 {
+		return time.Duration(secs), nil // -1 or -2 as sentinel values
+	}
+	return time.Duration(secs) * time.Second, nil
+}
+
+// PTTL returns the remaining TTL in milliseconds.
+func (c *Client) PTTL(key string) (time.Duration, error) {
+	v, err := c.Do("PTTL", key)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	ms := v.Integer()
+	if ms < 0 {
+		return time.Duration(ms), nil
+	}
+	return time.Duration(ms) * time.Millisecond, nil
+}
+
+// Persist removes the TTL from key. Returns true if the TTL was removed.
+func (c *Client) Persist(key string) (bool, error) {
+	v, err := c.Do("PERSIST", key)
+	if err != nil {
+		return false, err
+	}
+	if err := errFromValue(v); err != nil {
+		return false, err
+	}
+	return v.Integer() == 1, nil
+}
+
+// ─── hashes ──────────────────────────────────────────────────────────────────
+
+// HSet sets field/value pairs on a hash key. Fields are alternating field, value strings.
+// Returns the number of new fields added (not updated).
+func (c *Client) HSet(key string, fieldValues ...string) (int64, error) {
+	if len(fieldValues)%2 != 0 {
+		return 0, fmt.Errorf("valkey: HSet requires even number of field/value args, got %d", len(fieldValues))
+	}
+	args := make([]string, 0, 1+1+len(fieldValues))
+	args = append(args, "HSET", key)
+	args = append(args, fieldValues...)
+	v, err := c.Do(args...)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// HGet returns the value of a hash field. Returns ErrNil if the field or key doesn't exist.
+func (c *Client) HGet(key, field string) (string, error) {
+	v, err := c.Do("HGET", key, field)
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	if v.IsNull() {
+		return "", ErrNil
+	}
+	return string(v.Bytes()), nil
+}
+
+// HDel removes fields from a hash. Returns the number of fields deleted.
+func (c *Client) HDel(key string, fields ...string) (int64, error) {
+	args := make([]string, 0, 1+1+len(fields))
+	args = append(args, "HDEL", key)
+	args = append(args, fields...)
+	v, err := c.Do(args...)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// HGetAll returns all field/value pairs as a map. Returns an empty map if the key doesn't exist.
+func (c *Client) HGetAll(key string) (map[string]string, error) {
+	v, err := c.Do("HGETALL", key)
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	elems := v.Elems()
+	result := make(map[string]string, len(elems)/2)
+	for i := 0; i+1 < len(elems); i += 2 {
+		result[string(elems[i].Bytes())] = string(elems[i+1].Bytes())
+	}
+	return result, nil
+}
+
+// HLen returns the number of fields in a hash.
+func (c *Client) HLen(key string) (int64, error) {
+	v, err := c.Do("HLEN", key)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// HExists returns whether a field exists in a hash.
+func (c *Client) HExists(key, field string) (bool, error) {
+	v, err := c.Do("HEXISTS", key, field)
+	if err != nil {
+		return false, err
+	}
+	if err := errFromValue(v); err != nil {
+		return false, err
+	}
+	return v.Integer() == 1, nil
+}
+
+// HKeys returns all field names in a hash.
+func (c *Client) HKeys(key string) ([]string, error) {
+	v, err := c.Do("HKEYS", key)
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	elems := v.Elems()
+	result := make([]string, len(elems))
+	for i, e := range elems {
+		result[i] = string(e.Bytes())
+	}
+	return result, nil
+}
+
+// HVals returns all values in a hash.
+func (c *Client) HVals(key string) ([]string, error) {
+	v, err := c.Do("HVALS", key)
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	elems := v.Elems()
+	result := make([]string, len(elems))
+	for i, e := range elems {
+		result[i] = string(e.Bytes())
+	}
+	return result, nil
+}
+
+// ─── JSON ────────────────────────────────────────────────────────────────────
+
+// JSONSet stores a JSON value at path under key.
+// The value is marshalled to JSON before sending.
+func (c *Client) JSONSet(key, path string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("valkey: JSONSet marshal: %w", err)
+	}
+	v, err := c.Do("JSON.SET", key, path, string(data))
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// JSONGet retrieves the JSON value at path under key as a raw JSON string.
+// If no path is given, defaults to "$" (root).
+func (c *Client) JSONGet(key string, path ...string) (string, error) {
+	p := "$"
+	if len(path) > 0 {
+		p = path[0]
+	}
+	v, err := c.Do("JSON.GET", key, p)
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	if v.IsNull() {
+		return "", ErrNil
+	}
+	return string(v.Bytes()), nil
+}
+
+// JSONDel deletes the value at path. If no path is given, deletes the whole key.
+// Returns the number of paths deleted.
+func (c *Client) JSONDel(key string, path ...string) (int64, error) {
+	p := "$"
+	if len(path) > 0 {
+		p = path[0]
+	}
+	v, err := c.Do("JSON.DEL", key, p)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// JSONType returns the JSON type name at path.
+func (c *Client) JSONType(key string, path ...string) (string, error) {
+	p := "$"
+	if len(path) > 0 {
+		p = path[0]
+	}
+	v, err := c.Do("JSON.TYPE", key, p)
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	if v.IsNull() {
+		return "", ErrNil
+	}
+	return v.String(), nil
+}
+
+// JSONNumIncrBy increments the number at path by n and returns the new value.
+func (c *Client) JSONNumIncrBy(key, path string, n float64) (float64, error) {
+	v, err := c.Do("JSON.NUMINCRBY", key, path, strconv.FormatFloat(n, 'f', -1, 64))
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return strconv.ParseFloat(string(v.Bytes()), 64)
+}
+
+// ─── server ──────────────────────────────────────────────────────────────────
+
+// Ping sends PING and returns the response (usually "PONG").
+func (c *Client) Ping() (string, error) {
+	v, err := c.Do("PING")
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	return v.String(), nil
+}

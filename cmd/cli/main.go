@@ -153,6 +153,8 @@ func completer() readline.AutoCompleter {
 		"LPUSH", "RPUSH", "LPOP", "RPOP", "LRANGE", "LLEN",
 		// Hash commands
 		"HSET", "HGET", "HDEL", "HLEN", "HGETALL", "HKEYS", "HVALS", "HEXISTS",
+		// JSON commands
+		"JSON.SET", "JSON.GET", "JSON.DEL", "JSON.TYPE", "JSON.NUMINCRBY",
 		// Set commands
 		"SADD", "SREM", "SMEMBERS", "SISMEMBER",
 		// Sorted set commands
@@ -183,22 +185,24 @@ func completer() readline.AutoCompleter {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-// tokenise splits a command line into tokens, respecting double-quoted strings.
+// tokenise splits a command line into tokens, respecting quoted strings.
+// Both single and double quotes are supported:
 //
-//	SET key "hello world"  →  ["SET", "key", "hello world"]
+//	SET key "hello world"          →  ["SET", "key", "hello world"]
+//	JSON.SET k $ '{"name":"Alice"}'  →  ["JSON.SET", "k", "$", "{\"name\":\"Alice\"}"]
 func tokenise(line string) []string {
 	var tokens []string
 	var cur strings.Builder
-	inQuote := false
+	var quoteChar byte // 0 = not in quote, '"' or '\'' = in that quote
 
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 		switch {
-		case c == '"' && !inQuote:
-			inQuote = true
-		case c == '"' && inQuote:
-			inQuote = false
-		case c == ' ' && !inQuote:
+		case quoteChar == 0 && (c == '"' || c == '\''):
+			quoteChar = c
+		case quoteChar != 0 && c == quoteChar:
+			quoteChar = 0
+		case c == ' ' && quoteChar == 0:
 			if cur.Len() > 0 {
 				tokens = append(tokens, cur.String())
 				cur.Reset()
@@ -257,6 +261,13 @@ Server commands:
     HKEYS key
     HVALS key
 
+  JSON:
+    JSON.SET key path value      set JSON value at path
+    JSON.GET key [path]          get JSON value (default path: $)
+    JSON.DEL key [path]          delete value at path (default: whole key)
+    JSON.TYPE key [path]         get type at path (object, array, string, number, boolean, null)
+    JSON.NUMINCRBY key path n    increment number at path by n
+
   Server:
     PING
 
@@ -272,6 +283,12 @@ Examples:
   HSET user:1 name Alice age 30
   HGET user:1 name
   HGETALL user:1
+  JSON.SET user $ '{"name":"Alice","age":30}'
+  JSON.GET user $.name
+  JSON.SET user $.age 31
+  JSON.NUMINCRBY user $.age 1
+  JSON.DEL user $.age
+  JSON.TYPE user $.name
   DEL name
   PING
 `)

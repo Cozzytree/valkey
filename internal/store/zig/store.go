@@ -121,6 +121,12 @@ func (s *ZigStore) HExists(key, field string) (bool, error)       { return false
 func (s *ZigStore) HKeys(key string) ([]string, error)            { return nil, nil }
 func (s *ZigStore) HVals(key string) ([][]byte, error)            { return nil, nil }
 
+func (s *ZigStore) JSONSet(key, path string, value any) error             { return store.ErrWrongType }
+func (s *ZigStore) JSONGet(key, path string) (any, bool, error)           { return nil, false, nil }
+func (s *ZigStore) JSONDel(key, path string) (int, error)                 { return 0, nil }
+func (s *ZigStore) JSONType(key, path string) (string, error)             { return "", nil }
+func (s *ZigStore) JSONNumIncrBy(key, path string, n float64) (float64, error) { return 0, nil }
+
 func (s *ZigStore) Close() error {
 	C.store_free(s.ptr)
 	s.ptr = nil

@@ -315,3 +315,130 @@ func TestDel_RemovesHash(t *testing.T) {
 	require.True(t, s.Del("h"))
 	require.Equal(t, 0, s.Len())
 }
+
+// ─── JSON operations ────────────────────────────────────────────────────────
+
+func TestJSONSet_GetRoot(t *testing.T) {
+	s := NewGoStore()
+	doc := map[string]any{"name": "Alice", "age": float64(30)}
+	require.NoError(t, s.JSONSet("user", "$", doc))
+
+	got, ok, err := s.JSONGet("user", "$")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, doc, got)
+}
+
+func TestJSONSet_NestedPath(t *testing.T) {
+	s := NewGoStore()
+	doc := map[string]any{"name": "Alice", "age": float64(30)}
+	require.NoError(t, s.JSONSet("user", "$", doc))
+	require.NoError(t, s.JSONSet("user", "$.age", float64(31)))
+
+	got, ok, err := s.JSONGet("user", "$.age")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, float64(31), got)
+}
+
+func TestJSONSet_ArrayElement(t *testing.T) {
+	s := NewGoStore()
+	doc := map[string]any{"tags": []any{"go", "redis"}}
+	require.NoError(t, s.JSONSet("k", "$", doc))
+	require.NoError(t, s.JSONSet("k", "$.tags[0]", "valkey"))
+
+	got, ok, err := s.JSONGet("k", "$.tags[0]")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "valkey", got)
+}
+
+func TestJSONGet_MissingKey(t *testing.T) {
+	s := NewGoStore()
+	_, ok, err := s.JSONGet("nokey", "$")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestJSONGet_MissingPath(t *testing.T) {
+	s := NewGoStore()
+	s.JSONSet("k", "$", map[string]any{"name": "Alice"})
+	_, _, err := s.JSONGet("k", "$.missing")
+	require.Error(t, err)
+}
+
+func TestJSONDel_Field(t *testing.T) {
+	s := NewGoStore()
+	doc := map[string]any{"name": "Alice", "age": float64(30)}
+	s.JSONSet("k", "$", doc)
+
+	count, err := s.JSONDel("k", "$.age")
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	got, ok, err := s.JSONGet("k", "$")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, map[string]any{"name": "Alice"}, got)
+}
+
+func TestJSONDel_Root(t *testing.T) {
+	s := NewGoStore()
+	s.JSONSet("k", "$", map[string]any{"x": float64(1)})
+	count, err := s.JSONDel("k", "$")
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Equal(t, 0, s.Len())
+}
+
+func TestJSONType(t *testing.T) {
+	s := NewGoStore()
+	doc := map[string]any{"name": "Alice", "age": float64(30), "tags": []any{"a"}}
+	s.JSONSet("k", "$", doc)
+
+	typ, err := s.JSONType("k", "$")
+	require.NoError(t, err)
+	require.Equal(t, "object", typ)
+
+	typ, err = s.JSONType("k", "$.name")
+	require.NoError(t, err)
+	require.Equal(t, "string", typ)
+
+	typ, err = s.JSONType("k", "$.age")
+	require.NoError(t, err)
+	require.Equal(t, "number", typ)
+}
+
+func TestJSONNumIncrBy(t *testing.T) {
+	s := NewGoStore()
+	doc := map[string]any{"counter": float64(10)}
+	s.JSONSet("k", "$", doc)
+
+	result, err := s.JSONNumIncrBy("k", "$.counter", 5)
+	require.NoError(t, err)
+	require.Equal(t, float64(15), result)
+
+	got, _, _ := s.JSONGet("k", "$.counter")
+	require.Equal(t, float64(15), got)
+}
+
+func TestJSONNumIncrBy_NotANumber(t *testing.T) {
+	s := NewGoStore()
+	s.JSONSet("k", "$", map[string]any{"name": "Alice"})
+	_, err := s.JSONNumIncrBy("k", "$.name", 1)
+	require.ErrorIs(t, err, ErrNotANumber)
+}
+
+func TestWrongType_JSONGetOnString(t *testing.T) {
+	s := NewGoStore()
+	s.Set("k", []byte("v"))
+	_, _, err := s.JSONGet("k", "$")
+	require.ErrorIs(t, err, ErrWrongType)
+}
+
+func TestWrongType_GetOnJSON(t *testing.T) {
+	s := NewGoStore()
+	s.JSONSet("k", "$", map[string]any{"x": float64(1)})
+	_, ok := s.Get("k")
+	require.False(t, ok)
+}

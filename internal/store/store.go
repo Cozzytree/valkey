@@ -76,6 +76,29 @@ type Store interface {
 	// Returns ErrWrongType if the key exists and is not a hash.
 	HVals(key string) ([][]byte, error)
 
+	// JSONSet stores a JSON value at path under key. Path "$" sets the root.
+	// Returns ErrWrongType if the key exists and is not a JSON type.
+	JSONSet(key, path string, value any) error
+
+	// JSONGet returns the JSON value at path under key.
+	// Returns (nil, false, nil) if the key doesn't exist.
+	// Returns ErrWrongType if the key exists and is not a JSON type.
+	JSONGet(key, path string) (any, bool, error)
+
+	// JSONDel deletes the value at path. If path is "$", deletes the whole key.
+	// Returns the number of paths deleted.
+	// Returns ErrWrongType if the key exists and is not a JSON type.
+	JSONDel(key, path string) (int, error)
+
+	// JSONType returns the JSON type name at path ("object","array","string","number","boolean","null").
+	// Returns ErrWrongType if the key exists and is not a JSON type.
+	JSONType(key, path string) (string, error)
+
+	// JSONNumIncrBy increments the number at path by n and returns the new value.
+	// Returns ErrNotANumber if the value at path is not a number.
+	// Returns ErrWrongType if the key exists and is not a JSON type.
+	JSONNumIncrBy(key, path string, n float64) (float64, error)
+
 	// Len returns the number of keys currently in the store.
 	Len() int
 
