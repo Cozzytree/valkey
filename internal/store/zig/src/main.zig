@@ -1,22 +1,20 @@
 const std = @import("std");
-const Io = std.Io;
-
-const zig = @import("zig");
 const Allocator = std.mem.Allocator;
 
 pub const ValkeyZigStore = struct {
     allocator: Allocator,
     map: std.StringHashMap([]u8),
+    mutex: std.Thread.Mutex,
 };
 
 export fn store_new() ?*ValkeyZigStore {
     const gpa = std.heap.c_allocator;
 
     const store = gpa.create(ValkeyZigStore) catch return null;
-
     store.* = .{
         .allocator = gpa,
         .map = std.StringHashMap([]u8).init(gpa),
+        .mutex = .{},
     };
     return store;
 }
@@ -24,19 +22,21 @@ export fn store_new() ?*ValkeyZigStore {
 export fn store_free(store: *ValkeyZigStore) void {
     const allocator = store.allocator;
 
+    store.mutex.lock();
     var it = store.map.iterator();
     while (it.next()) |entry| {
         allocator.free(entry.key_ptr.*);
         allocator.free(entry.value_ptr.*);
     }
-
     store.map.deinit();
+    store.mutex.unlock();
+
     allocator.destroy(store);
 }
 
 fn dupSlice(allocator: Allocator, data: []const u8) ![]u8 {
     const buf = try allocator.alloc(u8, data.len);
-    std.mem.copyForwards(u8, buf, data);
+    @memcpy(buf, data);
     return buf;
 }
 
@@ -48,19 +48,36 @@ export fn store_set(
     val_len: usize,
 ) void {
     const allocator = store.allocator;
+    const key: []const u8 = key_ptr[0..key_len];
+    const val: []const u8 = val_ptr[0..val_len];
 
-    const key = key_ptr[0..key_len];
-    const val = val_ptr[0..val_len];
-
-    const key_copy = dupSlice(allocator, key) catch return;
     const val_copy = dupSlice(allocator, val) catch return;
 
-    const result = store.map.fetchPut(key_copy, val_copy) catch return;
+    store.mutex.lock();
+    defer store.mutex.unlock();
 
-    if (result) |old| {
-        allocator.free(old.key);
-        allocator.free(old.value);
+    // getOrPut gives us explicit control over whether the key is new or existing.
+    // fetchPut in Zig master does NOT update the stored key on overwrite, so we
+    // cannot use it here without leaking or double-freeing the key allocation.
+    const gop = store.map.getOrPut(key) catch {
+        allocator.free(val_copy);
+        return;
+    };
+
+    if (gop.found_existing) {
+        // Key already present: free the old value only.
+        // The existing owned key stays in the map — no new key allocation needed.
+        allocator.free(gop.value_ptr.*);
+    } else {
+        // New key: copy it so the map owns stable memory independent of the caller.
+        const key_copy = dupSlice(allocator, key) catch {
+            allocator.free(val_copy);
+            _ = store.map.remove(key);
+            return;
+        };
+        gop.key_ptr.* = key_copy;
     }
+    gop.value_ptr.* = val_copy;
 }
 
 export fn store_get(
@@ -71,19 +88,17 @@ export fn store_get(
     buf_len: usize,
     out_len: *usize,
 ) i32 {
-    const key = key_ptr[0..key_len];
+    const key: []const u8 = key_ptr[0..key_len];
+
+    store.mutex.lock();
+    defer store.mutex.unlock();
 
     const value = store.map.get(key) orelse return 0;
 
-    if (buf_ptr == null or buf_len < value.len) {
-        out_len.* = value.len;
-        return -1;
-    }
-
-    const buf = buf_ptr.?[0..buf_len];
-    std.mem.copyForwards(u8, buf, value);
-
     out_len.* = value.len;
+    if (buf_ptr == null or buf_len < value.len) return -1;
+
+    @memcpy(buf_ptr.?[0..value.len], value);
     return 1;
 }
 
@@ -92,17 +107,21 @@ export fn store_del(
     key_ptr: [*]const u8,
     key_len: usize,
 ) i32 {
-    const key = key_ptr[0..key_len];
+    const key: []const u8 = key_ptr[0..key_len];
+
+    store.mutex.lock();
+    defer store.mutex.unlock();
 
     if (store.map.fetchRemove(key)) |entry| {
         store.allocator.free(entry.key);
         store.allocator.free(entry.value);
         return 1;
     }
-
     return 0;
 }
 
 export fn store_len(store: *ValkeyZigStore) usize {
+    store.mutex.lock();
+    defer store.mutex.unlock();
     return store.map.count();
 }

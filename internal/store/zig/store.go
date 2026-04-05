@@ -14,9 +14,8 @@
 package zig
 
 /*
-#cgo LDFLAGS: -L${SRCDIR}/zig-out/lib -lstore
+#cgo LDFLAGS: /root/workspaces/valkey/internal/store/zig/zig-out/lib/libstore.a
 #include "store.h"
-#include <stdlib.h>
 */
 import "C"
 import (
