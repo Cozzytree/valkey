@@ -109,3 +109,5 @@ func cstr(s string) *C.char {
 	}
 	return (*C.char)(unsafe.Pointer(unsafe.StringData(s)))
 }
+
+// zig build-lib src/main.zig   -O ReleaseFast   -fPIC   -lc
