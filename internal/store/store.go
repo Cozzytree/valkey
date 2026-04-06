@@ -28,6 +28,9 @@ type Store interface {
 	// Expire sets a TTL on an existing key. Returns false if the key does not exist.
 	Expire(key string, ttl time.Duration) bool
 
+	// Exists returns the number of key exist
+	Exists(keys ...string) int
+
 	// TTL returns the remaining time-to-live for key.
 	// Returns (-2, false) if the key does not exist.
 	// Returns (-1, true) if the key exists but has no TTL.
@@ -98,6 +101,65 @@ type Store interface {
 	// Returns ErrNotANumber if the value at path is not a number.
 	// Returns ErrWrongType if the key exists and is not a JSON type.
 	JSONNumIncrBy(key, path string, n float64) (float64, error)
+
+	// LPush prepends one or more values to a list, creating it if needed.
+	// Returns the length of the list after the push.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LPush(key string, values ...[]byte) (int, error)
+
+	// RPush appends one or more values to a list, creating it if needed.
+	// Returns the length of the list after the push.
+	// Returns ErrWrongType if the key exists and is not a list.
+	RPush(key string, values ...[]byte) (int, error)
+
+	// LPop removes and returns the first element of a list.
+	// Returns (nil, false, nil) if the key does not exist.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LPop(key string) ([]byte, bool, error)
+
+	// RPop removes and returns the last element of a list.
+	// Returns (nil, false, nil) if the key does not exist.
+	// Returns ErrWrongType if the key exists and is not a list.
+	RPop(key string) ([]byte, bool, error)
+
+	// LLen returns the number of elements in a list.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LLen(key string) (int, error)
+
+	// LRange returns elements from index start to stop (inclusive).
+	// Negative indices count from the end (-1 is the last element).
+	// Returns ErrWrongType if the key exists and is not a list.
+	LRange(key string, start, stop int) ([][]byte, error)
+
+	// LIndex returns the element at the given index.
+	// Negative indices count from the end.
+	// Returns (nil, false, nil) if the key does not exist or the index is out of range.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LIndex(key string, index int) ([]byte, bool, error)
+
+	// LSet sets the element at the given index to value.
+	// Negative indices count from the end.
+	// Returns an error if the index is out of range.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LSet(key string, index int, value []byte) error
+
+	// LInsert inserts value before or after the first occurrence of pivot.
+	// Returns the length of the list after the insert, or -1 if pivot is not found.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LInsert(key string, before bool, pivot, value []byte) (int, error)
+
+	// LRem removes the first count occurrences of elements equal to value.
+	// count > 0: remove from head to tail.
+	// count < 0: remove from tail to head.
+	// count == 0: remove all occurrences.
+	// Returns the number of elements removed.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LRem(key string, count int, value []byte) (int, error)
+
+	// LTrim trims the list to only contain elements in the range [start, stop].
+	// Negative indices count from the end.
+	// Returns ErrWrongType if the key exists and is not a list.
+	LTrim(key string, start, stop int) error
 
 	// Len returns the number of keys currently in the store.
 	Len() int

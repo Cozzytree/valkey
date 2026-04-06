@@ -16,6 +16,7 @@ const (
 	TypeString EntryType = iota
 	TypeHash
 	TypeJSON
+	TypeList
 )
 
 // Entry is a typed value in the store. Every key maps to exactly one Entry.
@@ -24,5 +25,6 @@ type Entry struct {
 	Str      []byte            // populated when Type == TypeString
 	Hash     map[string][]byte // populated when Type == TypeHash
 	JSON     any               // populated when Type == TypeJSON
+	List     [][]byte          // populated when Type == TypeList
 	ExpireAt time.Time         // zero value = no expiry
 }

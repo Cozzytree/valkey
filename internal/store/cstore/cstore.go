@@ -156,6 +156,8 @@ func (s *CStore) Len() int {
 	return int(n)
 }
 
+func (s *CStore) Exists(keys ...string) int { return 0 }
+
 func (s *CStore) HSet(key string, fields ...string) (int, error) {
 	return 0, store.ErrWrongType
 }
@@ -168,6 +170,18 @@ func (s *CStore) HLen(key string) (int, error)                  { return 0, nil 
 func (s *CStore) HExists(key, field string) (bool, error)       { return false, nil }
 func (s *CStore) HKeys(key string) ([]string, error)            { return nil, nil }
 func (s *CStore) HVals(key string) ([][]byte, error)            { return nil, nil }
+
+func (s *CStore) LPush(key string, values ...[]byte) (int, error)            { return 0, store.ErrWrongType }
+func (s *CStore) RPush(key string, values ...[]byte) (int, error)            { return 0, store.ErrWrongType }
+func (s *CStore) LPop(key string) ([]byte, bool, error)                      { return nil, false, nil }
+func (s *CStore) RPop(key string) ([]byte, bool, error)                      { return nil, false, nil }
+func (s *CStore) LLen(key string) (int, error)                               { return 0, nil }
+func (s *CStore) LRange(key string, start, stop int) ([][]byte, error)       { return nil, nil }
+func (s *CStore) LIndex(key string, index int) ([]byte, bool, error)         { return nil, false, nil }
+func (s *CStore) LSet(key string, index int, value []byte) error             { return store.ErrWrongType }
+func (s *CStore) LInsert(key string, before bool, pivot, value []byte) (int, error) { return 0, store.ErrWrongType }
+func (s *CStore) LRem(key string, count int, value []byte) (int, error)      { return 0, nil }
+func (s *CStore) LTrim(key string, start, stop int) error                    { return store.ErrWrongType }
 
 func (s *CStore) JSONSet(key, path string, value any) error             { return store.ErrWrongType }
 func (s *CStore) JSONGet(key, path string) (any, bool, error)           { return nil, false, nil }

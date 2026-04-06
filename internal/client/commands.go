@@ -374,7 +374,171 @@ func (c *Client) JSONNumIncrBy(key, path string, n float64) (float64, error) {
 	return strconv.ParseFloat(string(v.Bytes()), 64)
 }
 
+// ─── lists ──────────────────────────────────────────────────────────────────
+
+// LPush prepends one or more values to a list. Returns the length of the list after the push.
+func (c *Client) LPush(key string, values ...string) (int64, error) {
+	args := make([]string, 0, 1+1+len(values))
+	args = append(args, "LPUSH", key)
+	args = append(args, values...)
+	v, err := c.Do(args...)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// RPush appends one or more values to a list. Returns the length of the list after the push.
+func (c *Client) RPush(key string, values ...string) (int64, error) {
+	args := make([]string, 0, 1+1+len(values))
+	args = append(args, "RPUSH", key)
+	args = append(args, values...)
+	v, err := c.Do(args...)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// LPop removes and returns the first element of a list. Returns ErrNil if the key does not exist.
+func (c *Client) LPop(key string) (string, error) {
+	v, err := c.Do("LPOP", key)
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	if v.IsNull() {
+		return "", ErrNil
+	}
+	return string(v.Bytes()), nil
+}
+
+// RPop removes and returns the last element of a list. Returns ErrNil if the key does not exist.
+func (c *Client) RPop(key string) (string, error) {
+	v, err := c.Do("RPOP", key)
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	if v.IsNull() {
+		return "", ErrNil
+	}
+	return string(v.Bytes()), nil
+}
+
+// LLen returns the number of elements in a list.
+func (c *Client) LLen(key string) (int64, error) {
+	v, err := c.Do("LLEN", key)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// LRange returns elements from index start to stop (inclusive). Negative indices count from the end.
+func (c *Client) LRange(key string, start, stop int) ([]string, error) {
+	v, err := c.Do("LRANGE", key, strconv.Itoa(start), strconv.Itoa(stop))
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	elems := v.Elems()
+	result := make([]string, len(elems))
+	for i, e := range elems {
+		result[i] = string(e.Bytes())
+	}
+	return result, nil
+}
+
+// LIndex returns the element at the given index. Negative indices count from the end.
+// Returns ErrNil if the index is out of range or the key does not exist.
+func (c *Client) LIndex(key string, index int) (string, error) {
+	v, err := c.Do("LINDEX", key, strconv.Itoa(index))
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	if v.IsNull() {
+		return "", ErrNil
+	}
+	return string(v.Bytes()), nil
+}
+
+// LSet sets the element at the given index to value. Returns an error if the index is out of range.
+func (c *Client) LSet(key string, index int, value string) error {
+	v, err := c.Do("LSET", key, strconv.Itoa(index), value)
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// LInsert inserts value before or after pivot in the list.
+// Returns the length of the list after insert, or -1 if pivot was not found.
+func (c *Client) LInsert(key, position, pivot, value string) (int64, error) {
+	v, err := c.Do("LINSERT", key, position, pivot, value)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// LRem removes count occurrences of value from the list.
+// count > 0: head to tail. count < 0: tail to head. count == 0: all.
+// Returns the number of elements removed.
+func (c *Client) LRem(key string, count int, value string) (int64, error) {
+	v, err := c.Do("LREM", key, strconv.Itoa(count), value)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// LTrim trims the list to only contain elements in the range [start, stop].
+func (c *Client) LTrim(key string, start, stop int) error {
+	v, err := c.Do("LTRIM", key, strconv.Itoa(start), strconv.Itoa(stop))
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
 // ─── server ──────────────────────────────────────────────────────────────────
+
+// DBSize returns the number of keys in the database.
+func (c *Client) DBSize() (int64, error) {
+	v, err := c.Do("DBSIZE")
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
 
 // Ping sends PING and returns the response (usually "PONG").
 func (c *Client) Ping() (string, error) {

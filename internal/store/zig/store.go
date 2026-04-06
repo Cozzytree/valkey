@@ -108,6 +108,8 @@ func (s *ZigStore) Persist(key string) bool { return false }
 
 func (s *ZigStore) ExpireN(n int) int { return 0 }
 
+func (s *ZigStore) Exists(keys ...string) int { return 0 }
+
 func (s *ZigStore) HSet(key string, fields ...string) (int, error) {
 	return 0, store.ErrWrongType
 }
@@ -120,6 +122,18 @@ func (s *ZigStore) HLen(key string) (int, error)                  { return 0, ni
 func (s *ZigStore) HExists(key, field string) (bool, error)       { return false, nil }
 func (s *ZigStore) HKeys(key string) ([]string, error)            { return nil, nil }
 func (s *ZigStore) HVals(key string) ([][]byte, error)            { return nil, nil }
+
+func (s *ZigStore) LPush(key string, values ...[]byte) (int, error)            { return 0, store.ErrWrongType }
+func (s *ZigStore) RPush(key string, values ...[]byte) (int, error)            { return 0, store.ErrWrongType }
+func (s *ZigStore) LPop(key string) ([]byte, bool, error)                      { return nil, false, nil }
+func (s *ZigStore) RPop(key string) ([]byte, bool, error)                      { return nil, false, nil }
+func (s *ZigStore) LLen(key string) (int, error)                               { return 0, nil }
+func (s *ZigStore) LRange(key string, start, stop int) ([][]byte, error)       { return nil, nil }
+func (s *ZigStore) LIndex(key string, index int) ([]byte, bool, error)         { return nil, false, nil }
+func (s *ZigStore) LSet(key string, index int, value []byte) error             { return store.ErrWrongType }
+func (s *ZigStore) LInsert(key string, before bool, pivot, value []byte) (int, error) { return 0, store.ErrWrongType }
+func (s *ZigStore) LRem(key string, count int, value []byte) (int, error)      { return 0, nil }
+func (s *ZigStore) LTrim(key string, start, stop int) error                    { return store.ErrWrongType }
 
 func (s *ZigStore) JSONSet(key, path string, value any) error             { return store.ErrWrongType }
 func (s *ZigStore) JSONGet(key, path string) (any, bool, error)           { return nil, false, nil }

@@ -275,7 +275,96 @@ export class Client {
     throw new ValkeyError("unexpected response type");
   }
 
+  // ─── List commands ────────────────────────────────────────────────────────
+
+  async lPush(key: string, ...values: string[]): Promise<number> {
+    const v = await this.do("LPUSH", key, ...values);
+    throwIfError(v);
+    if (v.type === "integer") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async rPush(key: string, ...values: string[]): Promise<number> {
+    const v = await this.do("RPUSH", key, ...values);
+    throwIfError(v);
+    if (v.type === "integer") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async lPop(key: string): Promise<string | null> {
+    const v = await this.do("LPOP", key);
+    throwIfError(v);
+    if (v.type === "bulk" && v.value === null) return null;
+    if (v.type === "bulk") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async rPop(key: string): Promise<string | null> {
+    const v = await this.do("RPOP", key);
+    throwIfError(v);
+    if (v.type === "bulk" && v.value === null) return null;
+    if (v.type === "bulk") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async lLen(key: string): Promise<number> {
+    const v = await this.do("LLEN", key);
+    throwIfError(v);
+    if (v.type === "integer") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async lRange(key: string, start: number, stop: number): Promise<string[]> {
+    const v = await this.do("LRANGE", key, String(start), String(stop));
+    throwIfError(v);
+    return bulkArray(v);
+  }
+
+  async lIndex(key: string, index: number): Promise<string | null> {
+    const v = await this.do("LINDEX", key, String(index));
+    throwIfError(v);
+    if (v.type === "bulk" && v.value === null) return null;
+    if (v.type === "bulk") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async lSet(key: string, index: number, value: string): Promise<void> {
+    const v = await this.do("LSET", key, String(index), value);
+    throwIfError(v);
+  }
+
+  async lInsert(
+    key: string,
+    position: "BEFORE" | "AFTER",
+    pivot: string,
+    value: string,
+  ): Promise<number> {
+    const v = await this.do("LINSERT", key, position, pivot, value);
+    throwIfError(v);
+    if (v.type === "integer") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async lRem(key: string, count: number, value: string): Promise<number> {
+    const v = await this.do("LREM", key, String(count), value);
+    throwIfError(v);
+    if (v.type === "integer") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async lTrim(key: string, start: number, stop: number): Promise<void> {
+    const v = await this.do("LTRIM", key, String(start), String(stop));
+    throwIfError(v);
+  }
+
   // ─── Server ──────────────────────────────────────────────────────────────
+
+  async dbSize(): Promise<number> {
+    const v = await this.do("DBSIZE");
+    throwIfError(v);
+    if (v.type === "integer") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
 
   async ping(): Promise<string> {
     const v = await this.do("PING");

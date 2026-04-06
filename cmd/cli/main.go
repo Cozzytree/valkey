@@ -151,6 +151,7 @@ func completer() readline.AutoCompleter {
 		"RENAME", "TYPE", "KEYS", "SCAN",
 		// List commands
 		"LPUSH", "RPUSH", "LPOP", "RPOP", "LRANGE", "LLEN",
+		"LINDEX", "LSET", "LINSERT", "LREM", "LTRIM",
 		// Hash commands
 		"HSET", "HGET", "HDEL", "HLEN", "HGETALL", "HKEYS", "HVALS", "HEXISTS",
 		// JSON commands
@@ -261,6 +262,19 @@ Server commands:
     HKEYS key
     HVALS key
 
+  Lists:
+    LPUSH key value [value ...]          prepend values to a list
+    RPUSH key value [value ...]          append values to a list
+    LPOP key                             remove and return the first element
+    RPOP key                             remove and return the last element
+    LLEN key                             get the length of a list
+    LRANGE key start stop                get elements in range (inclusive, negative ok)
+    LINDEX key index                     get element by index (negative ok)
+    LSET key index value                 set element at index
+    LINSERT key BEFORE|AFTER pivot val   insert before or after pivot
+    LREM key count value                 remove count occurrences of value
+    LTRIM key start stop                 trim list to [start, stop]
+
   JSON:
     JSON.SET key path value      set JSON value at path
     JSON.GET key [path]          get JSON value (default path: $)
@@ -289,6 +303,14 @@ Examples:
   JSON.NUMINCRBY user $.age 1
   JSON.DEL user $.age
   JSON.TYPE user $.name
+  LPUSH tasks "buy milk" "call mom"
+  RPUSH tasks "read book"
+  LRANGE tasks 0 -1
+  LPOP tasks
+  LINDEX tasks 0
+  LINSERT tasks BEFORE "read book" "exercise"
+  LREM tasks 1 "buy milk"
+  LTRIM tasks 0 2
   DEL name
   PING
 `)

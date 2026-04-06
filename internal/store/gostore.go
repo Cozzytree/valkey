@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"sync"
 	"time"
 )
@@ -334,6 +335,339 @@ func (s *GoStore) HVals(key string) ([][]byte, error) {
 	return vals, nil
 }
 
+// ─── list operations ────────────────────────────────────────────────────────
+
+// getOrCreateList retrieves an existing list entry or creates a new one.
+// Returns ErrWrongType if the key holds a non-list value.
+// Caller must hold a write lock.
+func (s *GoStore) getOrCreateList(key string) (*Entry, error) {
+	entry := s.getEntryLocked(key)
+	if entry == nil {
+		entry = &Entry{Type: TypeList, List: make([][]byte, 0)}
+		s.data[key] = entry
+		return entry, nil
+	}
+	if entry.Type != TypeList {
+		return nil, ErrWrongType
+	}
+	return entry, nil
+}
+
+// requireList retrieves an existing list entry.
+// Returns (nil, nil) if the key does not exist.
+// Returns ErrWrongType if the key holds a non-list value.
+// Caller must hold at least a read lock.
+func (s *GoStore) requireList(key string) (*Entry, error) {
+	entry := s.getEntryLocked(key)
+	if entry == nil {
+		return nil, nil
+	}
+	if entry.Type != TypeList {
+		return nil, ErrWrongType
+	}
+	return entry, nil
+}
+
+// removeIfEmpty deletes the key from the store when its list is empty.
+// Caller must hold a write lock.
+func (s *GoStore) removeIfEmpty(key string, entry *Entry) {
+	if len(entry.List) == 0 {
+		delete(s.data, key)
+	}
+}
+
+// resolveIndex converts a potentially-negative index into a valid position
+// within a list of the given length.
+// Returns the resolved index and whether it falls within bounds.
+func resolveIndex(index, length int) (int, bool) {
+	if index < 0 {
+		index += length
+	}
+	return index, index >= 0 && index < length
+}
+
+// clampRange resolves start/stop into a valid half-open range [lo, hi)
+// for a list of the given length. Returns (0, 0) when the range is empty.
+func clampRange(start, stop, length int) (lo, hi int) {
+	if start < 0 {
+		start += length
+	}
+	if stop < 0 {
+		stop += length
+	}
+	if start < 0 {
+		start = 0
+	}
+	if stop >= length {
+		stop = length - 1
+	}
+	if start > stop {
+		return 0, 0
+	}
+	return start, stop + 1 // convert inclusive stop → exclusive hi
+}
+
+func (s *GoStore) LPush(key string, values ...[]byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.getOrCreateList(key)
+	if err != nil {
+		return 0, err
+	}
+	// Prepend values in order: LPUSH key a b c → list becomes [c, b, a, ...].
+	// Redis prepends each value one at a time from left to right, so the
+	// last argument ends up at the head.
+	newElems := make([][]byte, len(values)+len(entry.List))
+	for i, v := range values {
+		newElems[len(values)-1-i] = v
+	}
+	copy(newElems[len(values):], entry.List)
+	entry.List = newElems
+
+	return len(entry.List), nil
+}
+
+func (s *GoStore) RPush(key string, values ...[]byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.getOrCreateList(key)
+	if err != nil {
+		return 0, err
+	}
+	entry.List = append(entry.List, values...)
+	return len(entry.List), nil
+}
+
+func (s *GoStore) LPop(key string) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if entry == nil || len(entry.List) == 0 {
+		return nil, false, nil
+	}
+
+	head := entry.List[0]
+	entry.List = entry.List[1:]
+	s.removeIfEmpty(key, entry)
+	return head, true, nil
+}
+
+func (s *GoStore) RPop(key string) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if entry == nil || len(entry.List) == 0 {
+		return nil, false, nil
+	}
+
+	lastIdx := len(entry.List) - 1
+	tail := entry.List[lastIdx]
+	entry.List = entry.List[:lastIdx]
+	s.removeIfEmpty(key, entry)
+	return tail, true, nil
+}
+
+func (s *GoStore) LLen(key string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return 0, err
+	}
+	if entry == nil {
+		return 0, nil
+	}
+	return len(entry.List), nil
+}
+
+func (s *GoStore) LRange(key string, start, stop int) ([][]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+
+	lo, hi := clampRange(start, stop, len(entry.List))
+	if lo >= hi {
+		return nil, nil
+	}
+
+	// Return a copy so the caller can't mutate the internal slice.
+	elements := make([][]byte, hi-lo)
+	copy(elements, entry.List[lo:hi])
+	return elements, nil
+}
+
+func (s *GoStore) LIndex(key string, index int) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if entry == nil {
+		return nil, false, nil
+	}
+
+	resolved, inBounds := resolveIndex(index, len(entry.List))
+	if !inBounds {
+		return nil, false, nil
+	}
+	return entry.List[resolved], true, nil
+}
+
+func (s *GoStore) LSet(key string, index int, value []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return err
+	}
+	if entry == nil {
+		return ErrIndexOutOfRange
+	}
+
+	resolved, inBounds := resolveIndex(index, len(entry.List))
+	if !inBounds {
+		return ErrIndexOutOfRange
+	}
+	entry.List[resolved] = value
+	return nil
+}
+
+func (s *GoStore) LInsert(key string, before bool, pivot, value []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return 0, err
+	}
+	if entry == nil {
+		return 0, nil
+	}
+
+	// Find the first occurrence of pivot.
+	pivotIdx := -1
+	for i, elem := range entry.List {
+		if bytes.Equal(elem, pivot) {
+			pivotIdx = i
+			break
+		}
+	}
+	if pivotIdx == -1 {
+		return -1, nil // pivot not found
+	}
+
+	insertAt := pivotIdx
+	if !before {
+		insertAt = pivotIdx + 1
+	}
+
+	// Insert value at insertAt position.
+	entry.List = append(entry.List, nil)                 // grow by one
+	copy(entry.List[insertAt+1:], entry.List[insertAt:]) // shift right
+	entry.List[insertAt] = value
+
+	return len(entry.List), nil
+}
+
+func (s *GoStore) LRem(key string, count int, value []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return 0, err
+	}
+	if entry == nil {
+		return 0, nil
+	}
+
+	removed := 0
+	maxToRemove := len(entry.List) // count == 0 means remove all
+	if count > 0 {
+		maxToRemove = count
+	} else if count < 0 {
+		maxToRemove = -count
+	}
+
+	if count >= 0 {
+		// Remove from head to tail.
+		filtered := make([][]byte, 0, len(entry.List))
+		for _, elem := range entry.List {
+			if removed < maxToRemove && bytes.Equal(elem, value) {
+				removed++
+				continue
+			}
+			filtered = append(filtered, elem)
+		}
+		entry.List = filtered
+	} else {
+		// Remove from tail to head: walk backwards.
+		filtered := make([][]byte, 0, len(entry.List))
+		for i := len(entry.List) - 1; i >= 0; i-- {
+			if removed < maxToRemove && bytes.Equal(entry.List[i], value) {
+				removed++
+				continue
+			}
+			filtered = append(filtered, entry.List[i])
+		}
+		// Reverse filtered back to original order.
+		for left, right := 0, len(filtered)-1; left < right; left, right = left+1, right-1 {
+			filtered[left], filtered[right] = filtered[right], filtered[left]
+		}
+		entry.List = filtered
+	}
+
+	s.removeIfEmpty(key, entry)
+	return removed, nil
+}
+
+func (s *GoStore) LTrim(key string, start, stop int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, err := s.requireList(key)
+	if err != nil {
+		return err
+	}
+	if entry == nil {
+		return nil
+	}
+
+	lo, hi := clampRange(start, stop, len(entry.List))
+	if lo >= hi {
+		entry.List = nil
+		delete(s.data, key)
+		return nil
+	}
+
+	trimmed := make([][]byte, hi-lo)
+	copy(trimmed, entry.List[lo:hi])
+	entry.List = trimmed
+
+	return nil
+}
+
 // ─── JSON operations ────────────────────────────────────────────────────────
 
 func (s *GoStore) JSONSet(key, path string, value any) error {
@@ -440,6 +774,22 @@ func (s *GoStore) Len() int {
 	n := len(s.data)
 	s.mu.RUnlock()
 	return n
+}
+
+func (s *GoStore) Exists(keys ...string) int {
+	count := 0
+	if len(keys) == 0 {
+		return count
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := range keys {
+		if _, ok := s.data[keys[i]]; ok {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *GoStore) Close() error { return nil }

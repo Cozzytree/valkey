@@ -261,6 +261,8 @@ func (c *Conn) handleRequest(args [][]byte) {
 		c.cmdGet(args[1:])
 	case "DEL":
 		c.cmdDel(args[1:])
+	case "EXISTS":
+		c.cmdExists(args[1:])
 	case "EXPIRE":
 		c.cmdExpire(args[1:])
 	case "PEXPIRE":
@@ -297,6 +299,30 @@ func (c *Conn) handleRequest(args [][]byte) {
 		c.cmdJSONType(args[1:])
 	case "JSON.NUMINCRBY":
 		c.cmdJSONNumIncrBy(args[1:])
+	case "LPUSH":
+		c.cmdLPush(args[1:])
+	case "RPUSH":
+		c.cmdRPush(args[1:])
+	case "LPOP":
+		c.cmdLPop(args[1:])
+	case "RPOP":
+		c.cmdRPop(args[1:])
+	case "LLEN":
+		c.cmdLLen(args[1:])
+	case "LRANGE":
+		c.cmdLRange(args[1:])
+	case "LINDEX":
+		c.cmdLIndex(args[1:])
+	case "LSET":
+		c.cmdLSet(args[1:])
+	case "LINSERT":
+		c.cmdLInsert(args[1:])
+	case "LREM":
+		c.cmdLRem(args[1:])
+	case "LTRIM":
+		c.cmdLTrim(args[1:])
+	case "DBSIZE":
+		c.cmdDBSize()
 	default:
 		_ = c.WriteRaw(respErr("ERR unknown command '" + cmd + "'"))
 	}
@@ -390,6 +416,19 @@ func (c *Conn) cmdDel(args [][]byte) {
 		}
 	}
 	_ = c.WriteRaw([]byte(fmt.Sprintf(":%d\r\n", deleted)))
+}
+
+func (c *Conn) cmdExists(args [][]byte) {
+	if len(args) < 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'EXISTS' command"))
+		return
+	}
+	keys := make([]string, len(args))
+	for i, a := range args {
+		keys[i] = string(a)
+	}
+	count := c.srv.store.Exists(keys...)
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", count))
 }
 
 func (c *Conn) cmdExpire(args [][]byte) {
@@ -621,6 +660,234 @@ func (c *Conn) cmdHVals(args [][]byte) {
 	_ = c.WriteRaw(respArray(vals))
 }
 
+// ─── List commands ──────────────────────────────────────────────────────────
+
+func (c *Conn) cmdLPush(args [][]byte) {
+	if len(args) < 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LPUSH' command"))
+		return
+	}
+	key := string(args[0])
+	values := args[1:]
+	length, err := c.srv.store.LPush(key, values...)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", length))
+}
+
+func (c *Conn) cmdRPush(args [][]byte) {
+	if len(args) < 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'RPUSH' command"))
+		return
+	}
+	key := string(args[0])
+	values := args[1:]
+	length, err := c.srv.store.RPush(key, values...)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", length))
+}
+
+func (c *Conn) cmdLPop(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LPOP' command"))
+		return
+	}
+	key := string(args[0])
+	elem, ok, err := c.srv.store.LPop(key)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if !ok {
+		_ = c.WriteRaw([]byte("$-1\r\n"))
+		return
+	}
+	_ = c.WriteRaw(respBulk(elem))
+}
+
+func (c *Conn) cmdRPop(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'RPOP' command"))
+		return
+	}
+	key := string(args[0])
+	elem, ok, err := c.srv.store.RPop(key)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if !ok {
+		_ = c.WriteRaw([]byte("$-1\r\n"))
+		return
+	}
+	_ = c.WriteRaw(respBulk(elem))
+}
+
+func (c *Conn) cmdLLen(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LLEN' command"))
+		return
+	}
+	key := string(args[0])
+	length, err := c.srv.store.LLen(key)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", length))
+}
+
+func (c *Conn) cmdLRange(args [][]byte) {
+	if len(args) != 3 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LRANGE' command"))
+		return
+	}
+	key := string(args[0])
+	start, err := strconv.Atoi(string(args[1]))
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not an integer or out of range"))
+		return
+	}
+	stop, err := strconv.Atoi(string(args[2]))
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not an integer or out of range"))
+		return
+	}
+
+	elements, err := c.srv.store.LRange(key, start, stop)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if elements == nil {
+		_ = c.WriteRaw([]byte("*0\r\n"))
+		return
+	}
+	_ = c.WriteRaw(respArray(elements))
+}
+
+func (c *Conn) cmdLIndex(args [][]byte) {
+	if len(args) != 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LINDEX' command"))
+		return
+	}
+	key := string(args[0])
+	index, err := strconv.Atoi(string(args[1]))
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not an integer or out of range"))
+		return
+	}
+
+	elem, ok, err := c.srv.store.LIndex(key, index)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	if !ok {
+		_ = c.WriteRaw([]byte("$-1\r\n"))
+		return
+	}
+	_ = c.WriteRaw(respBulk(elem))
+}
+
+func (c *Conn) cmdLSet(args [][]byte) {
+	if len(args) != 3 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LSET' command"))
+		return
+	}
+	key := string(args[0])
+	index, err := strconv.Atoi(string(args[1]))
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not an integer or out of range"))
+		return
+	}
+	value := args[2]
+
+	if err := c.srv.store.LSet(key, index, value); err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw([]byte("+OK\r\n"))
+}
+
+func (c *Conn) cmdLInsert(args [][]byte) {
+	if len(args) != 4 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LINSERT' command"))
+		return
+	}
+	key := string(args[0])
+	direction := strings.ToUpper(string(args[1]))
+	var before bool
+	switch direction {
+	case "BEFORE":
+		before = true
+	case "AFTER":
+		before = false
+	default:
+		_ = c.WriteRaw(respErr("ERR syntax error"))
+		return
+	}
+	pivot := args[2]
+	value := args[3]
+
+	length, err := c.srv.store.LInsert(key, before, pivot, value)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", length))
+}
+
+func (c *Conn) cmdLRem(args [][]byte) {
+	if len(args) != 3 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LREM' command"))
+		return
+	}
+	key := string(args[0])
+	count, err := strconv.Atoi(string(args[1]))
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not an integer or out of range"))
+		return
+	}
+	value := args[2]
+
+	removed, err := c.srv.store.LRem(key, count, value)
+	if err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", removed))
+}
+
+func (c *Conn) cmdLTrim(args [][]byte) {
+	if len(args) != 3 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'LTRIM' command"))
+		return
+	}
+	key := string(args[0])
+	start, err := strconv.Atoi(string(args[1]))
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not an integer or out of range"))
+		return
+	}
+	stop, err := strconv.Atoi(string(args[2]))
+	if err != nil {
+		_ = c.WriteRaw(respErr("ERR value is not an integer or out of range"))
+		return
+	}
+
+	if err := c.srv.store.LTrim(key, start, stop); err != nil {
+		c.writeErr(err)
+		return
+	}
+	_ = c.WriteRaw([]byte("+OK\r\n"))
+}
+
 // ─── JSON commands ──────────────────────────────────────────────────────────
 
 func (c *Conn) cmdJSONSet(args [][]byte) {
@@ -729,6 +996,11 @@ func (c *Conn) cmdJSONNumIncrBy(args [][]byte) {
 	// Return the result as a bulk string (matching RedisJSON).
 	s := strconv.FormatFloat(result, 'f', -1, 64)
 	_ = c.WriteRaw(respBulk([]byte(s)))
+}
+
+func (c *Conn) cmdDBSize() {
+	n := c.srv.store.Len()
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", n))
 }
 
 // writeErr writes a WRONGTYPE or other store error as a RESP error.
