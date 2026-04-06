@@ -2,3 +2,5 @@ zig-out
 .zig-cache
 
 bin
+
+node_modules

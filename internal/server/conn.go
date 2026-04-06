@@ -142,7 +142,7 @@ func (c *Conn) serve(ctx context.Context) {
 			}
 			c.srv.log.Printf("conn %d: read request: %v", c.id, err)
 			// Send a protocol error back to the client.
-			_ = c.WriteRaw([]byte(fmt.Sprintf("-ERR Protocol error: %v\r\n", err)))
+			_ = c.WriteRaw(fmt.Appendf(nil, "-ERR Protocol error: %v\r\n", err))
 			return
 		}
 

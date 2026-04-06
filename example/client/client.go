@@ -28,6 +28,15 @@ func main() {
 	if value, err := c.HGet(userid, "name"); err != nil {
 		return
 	} else {
-		fmt.Printf("HGET=%s, VALUE=%s", userid, value)
+		fmt.Printf("HGET=%s, VALUE=%s\n", userid, value)
+	}
+
+	err = c.JSONSet("userAI", "$", "asdas")
+	fmt.Printf("jsonset error: %v\n", err)
+
+	if res, err := c.JSONGet("userAI"); err != nil {
+		fmt.Printf("error json response: %v\n", err)
+	} else {
+		fmt.Printf("json set response: %v\n", res)
 	}
 }

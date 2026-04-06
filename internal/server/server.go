@@ -163,12 +163,10 @@ func (s *Server) acceptLoop() {
 		conn := s.newConn(nc)
 		s.register(conn)
 
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			conn.serve(s.ctx)
 			s.unregister(conn.id)
-		}()
+		})
 	}
 }
 
