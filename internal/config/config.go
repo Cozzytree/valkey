@@ -126,6 +126,13 @@ type SecurityConfig struct {
 	RenameCommand map[string]string
 	// ACLFile is the path to an ACL rules file.
 	ACLFile string
+	// TLSCertFile is the path to the server's TLS certificate (PEM).
+	TLSCertFile string
+	// TLSKeyFile is the path to the server's TLS private key (PEM).
+	TLSKeyFile string
+	// TLSCACertFile is the path to a CA certificate for mutual TLS client verification (PEM).
+	// Empty means no client certificate required.
+	TLSCACertFile string
 }
 
 // MemoryConfig groups memory limits and eviction policy.

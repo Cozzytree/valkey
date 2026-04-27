@@ -24,6 +24,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -38,9 +39,10 @@ import (
 
 // Server is the top-level TCP server.
 type Server struct {
-	cfg      *config.Config
-	listener net.Listener
-	store    store.Store
+	cfg       *config.Config
+	listeners []net.Listener
+	store     store.Store
+	auth      Authenticator
 
 	// conns holds all live client connections. Protected by mu.
 	mu    sync.RWMutex
@@ -70,6 +72,7 @@ func NewWithStore(cfg *config.Config, logger *log.Logger, st store.Store) *Serve
 	return &Server{
 		cfg:    cfg,
 		store:  st,
+		auth:   NewAuthenticator(&cfg.Security),
 		conns:  make(map[uint64]*Conn),
 		ctx:    ctx,
 		cancel: cancel,
@@ -77,25 +80,63 @@ func NewWithStore(cfg *config.Config, logger *log.Logger, st store.Store) *Serve
 	}
 }
 
-// Addr returns the address the server is listening on.
+// Addr returns the address the first listener is bound to.
 // Only valid after Start() has returned without error.
 func (s *Server) Addr() net.Addr {
-	return s.listener.Addr()
+	return s.listeners[0].Addr()
 }
 
-// Start binds the TCP socket and launches the accept loop goroutine.
-// It returns immediately; the loop runs in the background.
-func (s *Server) Start() error {
-	addr := fmt.Sprintf("%s:%d", s.cfg.Network.Bind[0], s.cfg.Network.Port)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("listen %s: %w", addr, err)
+// TLSAddr returns the address the TLS listener is bound to.
+// Only valid when a TLS listener is configured. If there is only one listener
+// and it's TLS, this returns the same as Addr().
+func (s *Server) TLSAddr() net.Addr {
+	if len(s.listeners) > 1 {
+		return s.listeners[1].Addr()
 	}
-	s.listener = ln
-	s.log.Printf("* Listening on %s", addr)
+	return s.listeners[0].Addr()
+}
 
-	s.wg.Add(2)
-	go s.acceptLoop()
+// Start binds TCP (and optionally TLS) sockets and launches accept loops.
+// It returns immediately; the loops run in the background.
+func (s *Server) Start() error {
+	bindAddr := s.cfg.Network.Bind[0]
+
+	// Plain TCP listener. Port 0 = OS-assigned, Port < 0 = disabled.
+	if s.cfg.Network.Port >= 0 {
+		addr := fmt.Sprintf("%s:%d", bindAddr, s.cfg.Network.Port)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen %s: %w", addr, err)
+		}
+		s.listeners = append(s.listeners, ln)
+		s.log.Printf("* Listening on %s", ln.Addr())
+	}
+
+	// TLS listener. Created when cert/key files are configured.
+	// TLSPort 0 = OS-assigned, TLSPort < 0 = disabled.
+	if s.cfg.Security.TLSCertFile != "" && s.cfg.Network.TLSPort >= 0 {
+		tlsCfg, err := buildTLSConfig(&s.cfg.Security)
+		if err != nil {
+			return err
+		}
+		addr := fmt.Sprintf("%s:%d", bindAddr, s.cfg.Network.TLSPort)
+		ln, err := tls.Listen("tcp", addr, tlsCfg)
+		if err != nil {
+			return fmt.Errorf("tls listen %s: %w", addr, err)
+		}
+		s.listeners = append(s.listeners, ln)
+		s.log.Printf("* TLS listening on %s", ln.Addr())
+	}
+
+	if len(s.listeners) == 0 {
+		return fmt.Errorf("no listeners configured (both port and tls-port are 0)")
+	}
+
+	// One accept goroutine per listener, plus the expiration worker.
+	s.wg.Add(len(s.listeners) + 1)
+	for _, ln := range s.listeners {
+		go s.acceptLoop(ln)
+	}
 	go s.expirationWorker()
 
 	return nil
@@ -109,7 +150,9 @@ func (s *Server) Start() error {
 func (s *Server) Stop() {
 	s.log.Println("* Shutting down…")
 	s.cancel()
-	s.listener.Close()
+	for _, ln := range s.listeners {
+		ln.Close()
+	}
 
 	// Close all live connections so their read loops unblock immediately.
 	s.mu.RLock()
@@ -138,11 +181,11 @@ func (s *Server) Len() int {
 // acceptLoop runs in its own goroutine. It calls Accept in a tight loop,
 // spawning a new goroutine per connection. It exits when the listener is
 // closed (which sets ctx.Done).
-func (s *Server) acceptLoop() {
+func (s *Server) acceptLoop(ln net.Listener) {
 	defer s.wg.Done()
 
 	for {
-		nc, err := s.listener.Accept()
+		nc, err := ln.Accept()
 		if err != nil {
 			// Distinguish a deliberate close (shutdown) from transient errors.
 			select {

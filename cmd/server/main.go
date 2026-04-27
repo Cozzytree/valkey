@@ -60,6 +60,13 @@ func main() {
 	logger.Printf("* Log level:   %s", cfg.General.LogLevel)
 	logger.Printf("* Databases:   %d", cfg.General.Databases)
 	logger.Printf("* Read buffer: %d bytes / conn", cfg.Network.ReadBufSize)
+	if cfg.Security.TLSCertFile != "" {
+		logger.Printf("* TLS cert:    %s", cfg.Security.TLSCertFile)
+		logger.Printf("* TLS key:     %s", cfg.Security.TLSKeyFile)
+		if cfg.Security.TLSCACertFile != "" {
+			logger.Printf("* TLS CA cert: %s (mutual TLS enabled)", cfg.Security.TLSCACertFile)
+		}
+	}
 
 	// ── Start server ──────────────────────────────────────────────────────────
 	srv := server.New(cfg, logger)

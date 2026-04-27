@@ -7,6 +7,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"os"
@@ -21,17 +22,29 @@ const defaultHost = "127.0.0.1"
 const defaultPort = 6379
 
 func main() {
-	host, port := parseFlags(os.Args[1:])
+	host, port, useTLS := parseFlags(os.Args[1:])
 	addr := fmt.Sprintf("%s:%d", host, port)
 
-	cl, err := client.Dial(addr)
+	var cl *client.Client
+	var err error
+	if useTLS {
+		cl, err = client.DialWithOptions(addr, client.Options{
+			TLS: &tls.Config{},
+		})
+	} else {
+		cl, err = client.Dial(addr)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not connect to Valkey at %s: %v\n", addr, err)
 		os.Exit(1)
 	}
 	defer cl.Close()
 
-	fmt.Printf("Connected to %s\n", addr)
+	proto := "tcp"
+	if useTLS {
+		proto = "tls"
+	}
+	fmt.Printf("Connected to %s (%s)\n", addr, proto)
 	runREPL(cl, addr)
 }
 
@@ -99,7 +112,7 @@ func runREPL(cl *client.Client, addr string) {
 
 // ─── flags ────────────────────────────────────────────────────────────────────
 
-func parseFlags(args []string) (host string, port int) {
+func parseFlags(args []string) (host string, port int, useTLS bool) {
 	host = defaultHost
 	port = defaultPort
 
@@ -131,12 +144,14 @@ func parseFlags(args []string) (host string, port int) {
 			if !strings.Contains(args[i], "=") {
 				i++
 			}
+		case "--tls":
+			useTLS = true
 		case "--help":
-			fmt.Println("Usage: valkey-cli [--host HOST] [--port PORT]")
+			fmt.Println("Usage: valkey-cli [--host HOST] [--port PORT] [--tls]")
 			os.Exit(0)
 		}
 	}
-	return host, port
+	return host, port, useTLS
 }
 
 // ─── tab completion ───────────────────────────────────────────────────────────
@@ -162,6 +177,8 @@ func completer() readline.AutoCompleter {
 		"ZADD", "ZRANGE", "ZRANK", "ZREM", "ZSCORE",
 		// Server commands
 		"PING", "DBSIZE", "FLUSHDB", "FLUSHALL", "INFO", "SELECT", "AUTH",
+		// ACL commands
+		"ACL",
 		// Client-side
 		"QUIT", "EXIT", "CLEAR", "HELP",
 	}
@@ -178,6 +195,21 @@ func completer() readline.AutoCompleter {
 		),
 		readline.PcItem("config",
 			readline.PcItem("get"), readline.PcItem("set"), readline.PcItem("rewrite"),
+		),
+	)
+	// ACL has subcommands.
+	items = append(items,
+		readline.PcItem("ACL",
+			readline.PcItem("SETUSER"), readline.PcItem("GETUSER"),
+			readline.PcItem("DELUSER"), readline.PcItem("LIST"),
+			readline.PcItem("WHOAMI"), readline.PcItem("USERS"),
+			readline.PcItem("CAT"),
+		),
+		readline.PcItem("acl",
+			readline.PcItem("setuser"), readline.PcItem("getuser"),
+			readline.PcItem("deluser"), readline.PcItem("list"),
+			readline.PcItem("whoami"), readline.PcItem("users"),
+			readline.PcItem("cat"),
 		),
 	)
 
@@ -284,6 +316,24 @@ Server commands:
 
   Server:
     PING
+    DBSIZE                              number of keys in database
+    AUTH password                       authenticate (default user)
+    AUTH username password              authenticate as ACL user
+
+  ACL:
+    ACL SETUSER username [rule ...]     create or modify user
+    ACL GETUSER username                get user info
+    ACL DELUSER username [username ...] delete users (cannot delete "default")
+    ACL LIST                            list all users in rule format
+    ACL USERS                           list all usernames
+    ACL WHOAMI                          return current username
+    ACL CAT                             list command categories
+    ACL CAT category                    list commands in a category
+
+    ACL rules: on, off, >password, <password, nopass, resetpass,
+               ~pattern, allkeys, resetkeys,
+               +command, -command, allcommands, nocommands,
+               +@category, -@category
 
 Tab-completion is available for all command names (upper and lowercase).
 Use arrow keys to navigate history.
@@ -313,5 +363,12 @@ Examples:
   LTRIM tasks 0 2
   DEL name
   PING
+  ACL SETUSER alice on >secret123 ~* +@all
+  ACL SETUSER readonly on >pass ~* +@read -@write
+  AUTH alice secret123
+  ACL WHOAMI
+  ACL LIST
+  ACL CAT read
+  ACL DELUSER alice
 `)
 }

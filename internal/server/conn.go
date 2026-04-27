@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +51,17 @@ type Conn struct {
 	// closeOnce guarantees net.Conn.Close is called exactly once, whether
 	// the close is triggered by the client, a server shutdown, or an error.
 	closeOnce sync.Once
+
+	// authenticated is true once the client has successfully sent AUTH.
+	// Defaults to true when no password is configured.
+	authenticated bool
+
+	// aclUser is the ACL user this connection authenticated as.
+	// nil means unauthenticated (unless no auth is required, then it's "default").
+	aclUser *ACLUser
+
+	// username tracks which user this connection is authenticated as.
+	username string
 }
 
 // newConn allocates a Conn, wiring up the BufReader with the config-driven
@@ -62,12 +74,19 @@ func (s *Server) newConn(nc net.Conn) *Conn {
 		proto.WithChunkSize(s.cfg.Network.ReadBufSize),
 		proto.WithMaxLineLen(s.cfg.Network.MaxInlineSize),
 	)
-	return &Conn{
-		id:     id,
-		nc:     nc,
-		reader: r,
-		srv:    s,
+	c := &Conn{
+		id:            id,
+		nc:            nc,
+		reader:        r,
+		srv:           s,
+		authenticated: !s.auth.Required(),
 	}
+	// If no auth required, assign the default user for ACL checks.
+	if c.authenticated {
+		c.aclUser = s.auth.ACL().GetUser("default")
+		c.username = "default"
+	}
+	return c
 }
 
 // close shuts down the underlying TCP connection exactly once.
@@ -252,7 +271,31 @@ func (c *Conn) handleRequest(args [][]byte) {
 	cmd := strings.ToUpper(string(args[0]))
 	c.srv.log.Printf("conn %d: %s args=%d", c.id, cmd, len(args)-1)
 
+	// Auth gate: only AUTH, PING, and QUIT are allowed before authentication.
+	if !c.authenticated {
+		switch cmd {
+		case "AUTH", "PING", "QUIT":
+			// allowed through
+		default:
+			_ = c.WriteRaw(respErr("NOAUTH Authentication required."))
+			return
+		}
+	}
+
+	// ACL permission check: verify command + key access.
+	if c.authenticated && c.aclUser != nil && cmd != "AUTH" {
+		keys := extractKeys(cmd, args[1:])
+		if err := c.srv.auth.CheckCommand(c.aclUser, cmd, keys); err != nil {
+			_ = c.WriteRaw(respErr(err.Error()))
+			return
+		}
+	}
+
 	switch cmd {
+	case "AUTH":
+		c.cmdAuth(args[1:])
+	case "ACL":
+		c.cmdACL(args[1:])
 	case "PING":
 		c.cmdPing(args[1:])
 	case "SET":
@@ -334,6 +377,262 @@ func (c *Conn) cmdPing(args [][]byte) {
 		return
 	}
 	_ = c.WriteRaw(respBulk(args[0]))
+}
+
+func (c *Conn) cmdAuth(args [][]byte) {
+	if len(args) < 1 || len(args) > 2 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'AUTH' command"))
+		return
+	}
+	if !c.srv.auth.Required() {
+		_ = c.WriteRaw(respErr("ERR Client sent AUTH, but no password is set. Did you mean ACL SETUSER with >password?"))
+		return
+	}
+
+	var username, password string
+	if len(args) == 1 {
+		// AUTH <password> → authenticate as "default" user
+		username = "default"
+		password = string(args[0])
+	} else {
+		// AUTH <username> <password>
+		username = string(args[0])
+		password = string(args[1])
+	}
+
+	user := c.srv.auth.Authenticate(username, password)
+	if user != nil {
+		c.authenticated = true
+		c.aclUser = user
+		c.username = username
+		_ = c.WriteRaw([]byte("+OK\r\n"))
+	} else {
+		_ = c.WriteRaw(respErr("WRONGPASS invalid username-password pair or user is disabled."))
+	}
+}
+
+// cmdACL handles ACL subcommands: SETUSER, GETUSER, DELUSER, LIST, WHOAMI, CAT, USERS.
+func (c *Conn) cmdACL(args [][]byte) {
+	if len(args) == 0 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'ACL' command"))
+		return
+	}
+
+	sub := strings.ToUpper(string(args[0]))
+	switch sub {
+	case "WHOAMI":
+		c.cmdACLWhoAmI()
+	case "SETUSER":
+		c.cmdACLSetUser(args[1:])
+	case "GETUSER":
+		c.cmdACLGetUser(args[1:])
+	case "DELUSER":
+		c.cmdACLDelUser(args[1:])
+	case "LIST":
+		c.cmdACLList()
+	case "USERS":
+		c.cmdACLUsers()
+	case "CAT":
+		c.cmdACLCat(args[1:])
+	default:
+		_ = c.WriteRaw(respErr(fmt.Sprintf("ERR unknown subcommand or wrong number of arguments for 'ACL|%s' command", sub)))
+	}
+}
+
+func (c *Conn) cmdACLWhoAmI() {
+	name := c.username
+	if name == "" {
+		name = "default"
+	}
+	_ = c.WriteRaw(respBulk([]byte(name)))
+}
+
+func (c *Conn) cmdACLSetUser(args [][]byte) {
+	if len(args) < 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'ACL|SETUSER' command"))
+		return
+	}
+	username := string(args[0])
+	rules := make([]string, len(args)-1)
+	for i, a := range args[1:] {
+		rules[i] = string(a)
+	}
+
+	acl := c.srv.auth.ACL()
+	if err := acl.SetUser(username, rules); err != nil {
+		_ = c.WriteRaw(respErr("ERR " + err.Error()))
+		return
+	}
+	_ = c.WriteRaw([]byte("+OK\r\n"))
+}
+
+func (c *Conn) cmdACLGetUser(args [][]byte) {
+	if len(args) != 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'ACL|GETUSER' command"))
+		return
+	}
+	username := string(args[0])
+	acl := c.srv.auth.ACL()
+	user := acl.GetUser(username)
+	if user == nil {
+		_ = c.WriteRaw([]byte("$-1\r\n"))
+		return
+	}
+
+	c.writeACLGetUserReply(user)
+}
+
+func (c *Conn) writeACLGetUserReply(user *ACLUser) {
+	// Redis returns: [flags, [flag...], passwords, [hash...], commands, cmdstr, keys, keystr]
+	// We flatten to an array of bulk strings for simplicity.
+	var parts [][]byte
+
+	// flags
+	parts = append(parts, []byte("flags"))
+	var flagStrs []string
+	if user.Enabled {
+		flagStrs = append(flagStrs, "on")
+	} else {
+		flagStrs = append(flagStrs, "off")
+	}
+	if user.NoPass {
+		flagStrs = append(flagStrs, "nopass")
+	}
+	if user.AllKeys {
+		flagStrs = append(flagStrs, "allkeys")
+	}
+	if user.AllCommands {
+		flagStrs = append(flagStrs, "allcommands")
+	}
+	parts = append(parts, []byte(strings.Join(flagStrs, " ")))
+
+	// passwords
+	parts = append(parts, []byte("passwords"))
+	hashes := make([]string, 0, len(user.passwords))
+	for h := range user.passwords {
+		hashes = append(hashes, h)
+	}
+	sort.Strings(hashes)
+	parts = append(parts, []byte(strings.Join(hashes, " ")))
+
+	// commands
+	parts = append(parts, []byte("commands"))
+	parts = append(parts, []byte(describeCommands(user)))
+
+	// keys
+	parts = append(parts, []byte("keys"))
+	parts = append(parts, []byte(describeKeys(user)))
+
+	_ = c.WriteRaw(respArray(parts))
+}
+
+func describeCommands(user *ACLUser) string {
+	if user.AllCommands {
+		return "+@all"
+	}
+	var parts []string
+	cmds := make([]string, 0, len(user.AllowedCommands))
+	for c := range user.AllowedCommands {
+		cmds = append(cmds, c)
+	}
+	sort.Strings(cmds)
+	for _, c := range cmds {
+		parts = append(parts, "+"+strings.ToLower(c))
+	}
+	denied := make([]string, 0, len(user.DeniedCommands))
+	for c := range user.DeniedCommands {
+		denied = append(denied, c)
+	}
+	sort.Strings(denied)
+	for _, c := range denied {
+		parts = append(parts, "-"+strings.ToLower(c))
+	}
+	if len(parts) == 0 {
+		return "-@all"
+	}
+	return strings.Join(parts, " ")
+}
+
+func describeKeys(user *ACLUser) string {
+	if user.AllKeys {
+		return "~*"
+	}
+	if len(user.KeyPatterns) == 0 {
+		return ""
+	}
+	parts := make([]string, len(user.KeyPatterns))
+	for i, p := range user.KeyPatterns {
+		parts[i] = "~" + p
+	}
+	return strings.Join(parts, " ")
+}
+
+func (c *Conn) cmdACLDelUser(args [][]byte) {
+	if len(args) < 1 {
+		_ = c.WriteRaw(respErr("ERR wrong number of arguments for 'ACL|DELUSER' command"))
+		return
+	}
+	names := make([]string, len(args))
+	for i, a := range args {
+		names[i] = string(a)
+	}
+	// Check if trying to delete "default".
+	for _, name := range names {
+		if name == "default" {
+			_ = c.WriteRaw(respErr("ERR The 'default' user cannot be removed"))
+			return
+		}
+	}
+
+	acl := c.srv.auth.ACL()
+	deleted := acl.DelUser(names)
+	_ = c.WriteRaw(fmt.Appendf(nil, ":%d\r\n", deleted))
+}
+
+func (c *Conn) cmdACLList() {
+	acl := c.srv.auth.ACL()
+	list := acl.List()
+	items := make([][]byte, len(list))
+	for i, entry := range list {
+		items[i] = []byte(entry)
+	}
+	_ = c.WriteRaw(respArray(items))
+}
+
+func (c *Conn) cmdACLUsers() {
+	acl := c.srv.auth.ACL()
+	names := acl.Users()
+	items := make([][]byte, len(names))
+	for i, name := range names {
+		items[i] = []byte(name)
+	}
+	_ = c.WriteRaw(respArray(items))
+}
+
+func (c *Conn) cmdACLCat(args [][]byte) {
+	acl := c.srv.auth.ACL()
+	if len(args) == 0 {
+		// List all categories.
+		cats := acl.Categories()
+		items := make([][]byte, len(cats))
+		for i, cat := range cats {
+			items[i] = []byte(cat)
+		}
+		_ = c.WriteRaw(respArray(items))
+		return
+	}
+	// List commands in a category.
+	category := string(args[0])
+	cmds, ok := acl.CategoryCommands(category)
+	if !ok {
+		_ = c.WriteRaw(respErr(fmt.Sprintf("ERR Unknown ACL cat category '%s'", category)))
+		return
+	}
+	items := make([][]byte, len(cmds))
+	for i, cmd := range cmds {
+		items[i] = []byte(strings.ToLower(cmd))
+	}
+	_ = c.WriteRaw(respArray(items))
 }
 
 func (c *Conn) cmdSet(args [][]byte) {

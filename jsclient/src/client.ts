@@ -9,6 +9,16 @@ export class ValkeyError extends Error {
 
 export const ErrNil = new ValkeyError("valkey: nil");
 
+/** Options for connecting to a Valkey server. */
+export interface DialOptions {
+  /** ACL username. Omit or leave empty to use "default". */
+  username?: string;
+  /** Password sent via AUTH immediately after connecting. */
+  password?: string;
+  /** Enable TLS. Pass true for default settings or an object for fine control. */
+  tls?: boolean | { rejectUnauthorized?: boolean };
+}
+
 interface Pending {
   resolve: (v: RespValue) => void;
   reject: (e: Error) => void;
@@ -28,7 +38,7 @@ export class Client {
   }
 
   /** Connect to a Valkey server. addr is "host:port" (e.g. "127.0.0.1:6379"). */
-  static async dial(addr: string): Promise<Client> {
+  static async dial(addr: string, opts?: DialOptions): Promise<Client> {
     const [host, portStr] = addr.includes(":")
       ? [
           addr.slice(0, addr.lastIndexOf(":")),
@@ -40,9 +50,16 @@ export class Client {
 
     const client = new Client();
 
+    const tlsOpt = opts?.tls
+      ? typeof opts.tls === "object"
+        ? opts.tls
+        : true
+      : undefined;
+
     client.socket = await Bun.connect({
       hostname,
       port,
+      tls: tlsOpt as any,
       socket: {
         data(_socket, data) {
           client.reader.append(new Uint8Array(data));
@@ -65,6 +82,14 @@ export class Client {
         },
       },
     });
+
+    if (opts?.password) {
+      if (opts.username) {
+        await client.authWithUser(opts.username, opts.password);
+      } else {
+        await client.auth(opts.password);
+      }
+    }
 
     return client;
   }
@@ -358,6 +383,76 @@ export class Client {
   }
 
   // ─── Server ──────────────────────────────────────────────────────────────
+
+  async auth(password: string): Promise<void> {
+    const v = await this.do("AUTH", password);
+    throwIfError(v);
+  }
+
+  async authWithUser(username: string, password: string): Promise<void> {
+    const v = await this.do("AUTH", username, password);
+    throwIfError(v);
+  }
+
+  // ─── ACL commands ──────────────────────────────────────────────────────
+
+  async aclWhoAmI(): Promise<string> {
+    const v = await this.do("ACL", "WHOAMI");
+    throwIfError(v);
+    if (v.type === "bulk" && v.value !== null) return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async aclSetUser(username: string, ...rules: string[]): Promise<void> {
+    const v = await this.do("ACL", "SETUSER", username, ...rules);
+    throwIfError(v);
+  }
+
+  async aclGetUser(username: string): Promise<Record<string, string>> {
+    const v = await this.do("ACL", "GETUSER", username);
+    throwIfError(v);
+    if (v.type === "bulk" && v.value === null) {
+      throw new ValkeyError("user not found");
+    }
+    if (v.type !== "array" || v.value === null) return {};
+    const result: Record<string, string> = {};
+    for (let i = 0; i + 1 < v.value.length; i += 2) {
+      const k = v.value[i];
+      const val = v.value[i + 1];
+      if (k.type === "bulk" && k.value !== null && val.type === "bulk") {
+        result[k.value] = val.value ?? "";
+      }
+    }
+    return result;
+  }
+
+  async aclDelUser(...usernames: string[]): Promise<number> {
+    const v = await this.do("ACL", "DELUSER", ...usernames);
+    throwIfError(v);
+    if (v.type === "integer") return v.value;
+    throw new ValkeyError("unexpected response type");
+  }
+
+  async aclList(): Promise<string[]> {
+    const v = await this.do("ACL", "LIST");
+    throwIfError(v);
+    return bulkArray(v);
+  }
+
+  async aclUsers(): Promise<string[]> {
+    const v = await this.do("ACL", "USERS");
+    throwIfError(v);
+    return bulkArray(v);
+  }
+
+  async aclCat(category?: string): Promise<string[]> {
+    const args = category
+      ? ["ACL", "CAT", category]
+      : ["ACL", "CAT"];
+    const v = await this.do(...args);
+    throwIfError(v);
+    return bulkArray(v);
+  }
 
   async dbSize(): Promise<number> {
     const v = await this.do("DBSIZE");

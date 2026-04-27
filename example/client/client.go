@@ -8,9 +8,11 @@ import (
 )
 
 func main() {
+	// Use valclient.DialWithOptions to authenticate if the server has --requirepass set.
+	// Example: valclient.DialWithOptions(":6379", valclient.Options{Password: "secret"})
 	c, err := valclient.Dial(":6379")
 	if err != nil {
-		log.Fatal(c)
+		log.Fatal(err)
 	}
 	defer func() {
 		_ = c.Close()

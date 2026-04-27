@@ -120,6 +120,12 @@ var registry = []ArgDef{
 		Description: `Rename or disable a command: "rename-command CMD newname" (empty newname disables)`},
 	{Long: "aclfile", Type: ArgTypeString,
 		Description: "Path to an ACL rules file"},
+	{Long: "tls-cert-file", Type: ArgTypeString,
+		Description: "Path to the TLS certificate file (PEM)"},
+	{Long: "tls-key-file", Type: ArgTypeString,
+		Description: "Path to the TLS private key file (PEM)"},
+	{Long: "tls-ca-cert-file", Type: ArgTypeString,
+		Description: "Path to the CA certificate for mutual TLS (PEM)"},
 
 	// ── Memory ───────────────────────────────────────────────────────────────
 	{Long: "maxmemory", Short: "m", Type: ArgTypeMemoryBytes,
@@ -293,7 +299,8 @@ func Help() string {
 			"appendonly", "appendfilename", "appendfsync",
 			"no-appendfsync-on-rewrite", "auto-aof-rewrite-percentage",
 			"auto-aof-rewrite-min-size"}},
-		{"Security", []string{"requirepass", "rename-command", "aclfile"}},
+		{"Security", []string{"requirepass", "rename-command", "aclfile",
+			"tls-cert-file", "tls-key-file", "tls-ca-cert-file"}},
 		{"Memory", []string{"maxmemory", "maxmemory-policy", "maxmemory-samples",
 			"lazyfree-lazy-eviction"}},
 		{"Replication", []string{"replicaof", "masterauth",
@@ -616,6 +623,15 @@ func applyFlag(cfg *Config, key, raw string) error {
 
 	case "aclfile":
 		cfg.Security.ACLFile = raw
+
+	case "tls-cert-file":
+		cfg.Security.TLSCertFile = raw
+
+	case "tls-key-file":
+		cfg.Security.TLSKeyFile = raw
+
+	case "tls-ca-cert-file":
+		cfg.Security.TLSCACertFile = raw
 
 	// ── Memory ───────────────────────────────────────────────────────────────
 	case "maxmemory":

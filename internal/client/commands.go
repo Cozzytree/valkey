@@ -540,6 +540,118 @@ func (c *Client) DBSize() (int64, error) {
 	return v.Integer(), nil
 }
 
+// Auth authenticates the connection with the given password (as "default" user).
+func (c *Client) Auth(password string) error {
+	v, err := c.Do("AUTH", password)
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// AuthWithUser authenticates the connection with a username and password (ACL).
+func (c *Client) AuthWithUser(username, password string) error {
+	v, err := c.Do("AUTH", username, password)
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// ACLWhoAmI returns the username of the current connection.
+func (c *Client) ACLWhoAmI() (string, error) {
+	v, err := c.Do("ACL", "WHOAMI")
+	if err != nil {
+		return "", err
+	}
+	if err := errFromValue(v); err != nil {
+		return "", err
+	}
+	return string(v.Bytes()), nil
+}
+
+// ACLSetUser creates or modifies an ACL user with the given rules.
+func (c *Client) ACLSetUser(username string, rules ...string) error {
+	args := make([]string, 0, 2+len(rules))
+	args = append(args, "ACL", "SETUSER", username)
+	args = append(args, rules...)
+	v, err := c.Do(args...)
+	if err != nil {
+		return err
+	}
+	return errFromValue(v)
+}
+
+// ACLDelUser deletes one or more ACL users. Returns the number deleted.
+func (c *Client) ACLDelUser(usernames ...string) (int64, error) {
+	args := make([]string, 0, 2+len(usernames))
+	args = append(args, "ACL", "DELUSER")
+	args = append(args, usernames...)
+	v, err := c.Do(args...)
+	if err != nil {
+		return 0, err
+	}
+	if err := errFromValue(v); err != nil {
+		return 0, err
+	}
+	return v.Integer(), nil
+}
+
+// ACLList returns all ACL users in rule format.
+func (c *Client) ACLList() ([]string, error) {
+	v, err := c.Do("ACL", "LIST")
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	elems := v.Elems()
+	result := make([]string, len(elems))
+	for i, e := range elems {
+		result[i] = string(e.Bytes())
+	}
+	return result, nil
+}
+
+// ACLUsers returns all ACL usernames.
+func (c *Client) ACLUsers() ([]string, error) {
+	v, err := c.Do("ACL", "USERS")
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	elems := v.Elems()
+	result := make([]string, len(elems))
+	for i, e := range elems {
+		result[i] = string(e.Bytes())
+	}
+	return result, nil
+}
+
+// ACLCat returns command categories, or commands in a category.
+func (c *Client) ACLCat(category ...string) ([]string, error) {
+	args := []string{"ACL", "CAT"}
+	if len(category) > 0 {
+		args = append(args, category[0])
+	}
+	v, err := c.Do(args...)
+	if err != nil {
+		return nil, err
+	}
+	if err := errFromValue(v); err != nil {
+		return nil, err
+	}
+	elems := v.Elems()
+	result := make([]string, len(elems))
+	for i, e := range elems {
+		result[i] = string(e.Bytes())
+	}
+	return result, nil
+}
+
 // Ping sends PING and returns the response (usually "PONG").
 func (c *Client) Ping() (string, error) {
 	v, err := c.Do("PING")

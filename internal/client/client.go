@@ -2,6 +2,7 @@
 package client
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
@@ -17,16 +18,53 @@ type Client struct {
 	mu     sync.Mutex // serialises the write+read pair
 }
 
+// Options configures the client connection.
+type Options struct {
+	// Username is the ACL username for AUTH. Leave empty to use "default".
+	Username string
+	// Password is sent via AUTH immediately after connecting.
+	// Leave empty to skip authentication.
+	Password string
+	// TLS enables TLS when non-nil. Use &tls.Config{} for default settings
+	// or &tls.Config{InsecureSkipVerify: true} for self-signed certs.
+	TLS *tls.Config
+}
+
 // Dial connects to addr (e.g. "127.0.0.1:6379") and returns a Client.
 func Dial(addr string) (*Client, error) {
-	conn, err := net.Dial("tcp", addr)
+	return DialWithOptions(addr, Options{})
+}
+
+// DialWithOptions connects to addr and applies the given options.
+// If a password is set, AUTH is sent automatically after connecting.
+func DialWithOptions(addr string, opts Options) (*Client, error) {
+	var conn net.Conn
+	var err error
+	if opts.TLS != nil {
+		conn, err = tls.Dial("tcp", addr, opts.TLS)
+	} else {
+		conn, err = net.Dial("tcp", addr)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return &Client{
+	c := &Client{
 		conn:   conn,
 		reader: proto.NewBufReader(conn),
-	}, nil
+	}
+	if opts.Password != "" {
+		var authErr error
+		if opts.Username != "" {
+			authErr = c.AuthWithUser(opts.Username, opts.Password)
+		} else {
+			authErr = c.Auth(opts.Password)
+		}
+		if authErr != nil {
+			c.Close()
+			return nil, fmt.Errorf("auth: %w", authErr)
+		}
+	}
+	return c, nil
 }
 
 // Do sends a command (encoded as a RESP array) and returns the parsed response.

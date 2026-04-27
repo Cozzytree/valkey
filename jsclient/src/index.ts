@@ -1,2 +1,2 @@
-export { Client, ValkeyError, ErrNil } from "./client";
+export { Client, ValkeyError, ErrNil, type DialOptions } from "./client";
 export type { RespValue } from "./resp";
